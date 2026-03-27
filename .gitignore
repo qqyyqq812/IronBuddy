@@ -1,0 +1,49 @@
+# 编译产物
+build/
+*.o
+*.elf
+*.bin
+*.hex
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+
+# Node.js
+node_modules/
+dist/
+
+# AI 模型文件 (太大，不入库)
+*.onnx
+*.rknn
+*.pt
+*.pth
+*.tflite
+*.caffemodel
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 敏感信息
+.env
+.env.local
+*.key
+
+# === V3.0 竞赛版追加 ===
+models/
+backups/
+docs/hardware_ref/
+*.zip
+*.whl
+*.tar.gz
+__pycache__/
+*.pyc

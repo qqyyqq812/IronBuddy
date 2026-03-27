@@ -1,0 +1,38 @@
+{
+    "squat": {
+        "name": "深蹲",
+        "description": "标准深蹲：双脚与肩同宽，臀部向后坐，膝盖不超过脚尖",
+        "keypoints": {
+            "hip": 11,
+            "knee": 13,
+            "ankle": 15
+        },
+        "angle_joint": "knee",
+        "threshold_down": 90,
+        "threshold_up": 160,
+        "hold_frames": 3,
+        "feedback": {
+            "too_shallow": "蹲得不够深，膝盖角度还差 {diff} 度",
+            "good_rep": "标准！",
+            "back_lean": "注意背部挺直"
+        }
+    },
+    "pushup": {
+        "name": "俯卧撑",
+        "description": "标准俯卧撑：身体保持一条直线，肘部弯曲至约90度",
+        "keypoints": {
+            "shoulder": 5,
+            "elbow": 7,
+            "wrist": 9
+        },
+        "angle_joint": "elbow",
+        "threshold_down": 90,
+        "threshold_up": 160,
+        "hold_frames": 3,
+        "feedback": {
+            "too_shallow": "再低一点，手肘角度还差 {diff} 度",
+            "good_rep": "完美！",
+            "hip_sag": "臀部不要塌下去"
+        }
+    }
+}

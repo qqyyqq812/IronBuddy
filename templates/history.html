@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IronBuddy — 训练历史</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-card: rgba(22, 27, 45, 0.85);
+            --bg-glass: rgba(30, 38, 60, 0.6);
+            --border: rgba(99, 115, 155, 0.25);
+            --text-primary: #e2e8f0;
+            --text-secondary: #8892b0;
+            --accent-blue: #60a5fa;
+            --accent-green: #34d399;
+            --accent-red: #f87171;
+            --accent-amber: #fbbf24;
+            --accent-purple: #a78bfa;
+        }
+
+        body {
+            background: var(--bg-primary);
+            background-image:
+                radial-gradient(ellipse at 20% 50%, rgba(96,165,250,0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(167,139,250,0.04) 0%, transparent 50%);
+            color: var(--text-primary);
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            min-height: 100vh;
+        }
+
+        .header {
+            padding: 16px 24px;
+            display: flex; align-items: center; justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(12px);
+            background: rgba(10, 14, 23, 0.8);
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .logo-icon {
+            width: 34px; height: 34px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 10px; display: flex; align-items: center; justify-content: center;
+            font-size: 17px;
+        }
+        .header h1 { font-size: 1.2em; font-weight: 600; }
+        .header h1 span { color: var(--accent-blue); }
+
+        .nav-link {
+            color: var(--accent-blue); text-decoration: none;
+            font-size: 0.85em; font-weight: 600;
+            padding: 6px 14px; border-radius: 6px;
+            border: 1px solid rgba(96,165,250,0.3);
+            transition: all 0.2s;
+        }
+        .nav-link:hover { background: rgba(96,165,250,0.1); }
+
+        .dashboard {
+            max-width: 1200px; margin: 0 auto;
+            padding: 20px;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 12px; padding: 20px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        }
+        .card-full { grid-column: 1 / -1; }
+        .card-title {
+            font-size: 0.75em; font-weight: 600; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 1.5px;
+            margin-bottom: 16px;
+            display: flex; align-items: center; gap: 7px;
+        }
+
+        /* Summary stats row */
+        .summary-row {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+            grid-column: 1 / -1;
+        }
+        .summary-stat {
+            background: var(--bg-glass); border: 1px solid var(--border);
+            border-radius: 10px; padding: 16px; text-align: center;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .summary-stat:hover { border-color: var(--accent-blue); box-shadow: 0 0 12px rgba(96,165,250,0.15); }
+        .summary-stat .label { font-size: 0.7em; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px; }
+        .summary-stat .value { font-size: 2em; font-weight: 700; }
+        .summary-stat .value.green { color: var(--accent-green); }
+        .summary-stat .value.red { color: var(--accent-red); }
+        .summary-stat .value.blue { color: var(--accent-blue); }
+        .summary-stat .value.amber { color: var(--accent-amber); }
+
+        /* Heatmap calendar */
+        .heatmap-grid {
+            display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px;
+        }
+        .heatmap-cell {
+            aspect-ratio: 1; border-radius: 4px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.65em; color: var(--text-secondary);
+            transition: all 0.3s;
+            position: relative;
+        }
+        .heatmap-cell.header-cell { font-weight: 600; color: var(--text-secondary); font-size: 0.7em; }
+        .heatmap-cell.lv0 { background: rgba(100,120,160,0.1); }
+        .heatmap-cell.lv1 { background: rgba(96,165,250,0.15); border: 1px solid rgba(96,165,250,0.2); }
+        .heatmap-cell.lv2 { background: rgba(52,211,153,0.2); border: 1px solid rgba(52,211,153,0.3); }
+        .heatmap-cell.lv3 { background: rgba(251,191,36,0.25); border: 1px solid rgba(251,191,36,0.3); }
+        .heatmap-cell.lv4 { background: rgba(248,113,113,0.3); border: 1px solid rgba(248,113,113,0.4); }
+        .heatmap-cell.today { box-shadow: 0 0 0 2px var(--accent-blue); }
+
+        .heatmap-legend {
+            display: flex; align-items: center; gap: 8px; margin-top: 12px;
+            font-size: 0.7em; color: var(--text-secondary);
+        }
+        .legend-box { width: 14px; height: 14px; border-radius: 3px; }
+
+        /* Chart container */
+        .chart-container { position: relative; height: 280px; }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center; padding: 40px 20px;
+            color: var(--text-secondary); font-size: 0.9em;
+        }
+
+        /* Session list */
+        .session-list { max-height: 300px; overflow-y: auto; }
+        .session-item {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 10px 12px; border-radius: 8px;
+            background: var(--bg-glass); border: 1px solid var(--border);
+            margin-bottom: 6px; font-size: 0.82em;
+        }
+        .session-item .time { color: var(--text-secondary); }
+        .session-item .stats { display: flex; gap: 12px; }
+        .session-item .good { color: var(--accent-green); font-weight: 600; }
+        .session-item .bad { color: var(--accent-red); font-weight: 600; }
+
+        @media (max-width: 768px) {
+            .dashboard { grid-template-columns: 1fr; }
+            .summary-row { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <div class="header-left">
+            <div class="logo-icon">🏋</div>
+            <h1>Iron<span>Buddy</span> · 训练历史</h1>
+        </div>
+        <a href="/" class="nav-link">← 返回控制台</a>
+    </header>
+
+    <main class="dashboard">
+
+        <!-- Summary Stats -->
+        <div class="summary-row">
+            <div class="summary-stat">
+                <div class="label">总训练天数</div>
+                <div class="value blue" id="totalDays">—</div>
+            </div>
+            <div class="summary-stat">
+                <div class="label">总标准深蹲</div>
+                <div class="value green" id="totalGood">—</div>
+            </div>
+            <div class="summary-stat">
+                <div class="label">总违规次数</div>
+                <div class="value red" id="totalFailed">—</div>
+            </div>
+            <div class="summary-stat">
+                <div class="label">历史合格率</div>
+                <div class="value amber" id="totalRate">—</div>
+            </div>
+        </div>
+
+        <!-- Trend Chart -->
+        <div class="card card-full">
+            <div class="card-title">📈 每日训练趋势</div>
+            <div class="chart-container">
+                <canvas id="trendChart"></canvas>
+            </div>
+        </div>
+
+        <!-- Heatmap Calendar -->
+        <div class="card">
+            <div class="card-title">🗓️ 训练热力日历（最近 28 天）</div>
+            <div class="heatmap-grid" id="heatmapGrid"></div>
+            <div class="heatmap-legend">
+                <span>少</span>
+                <div class="legend-box lv0"></div>
+                <div class="legend-box lv1"></div>
+                <div class="legend-box lv2"></div>
+                <div class="legend-box lv3"></div>
+                <div class="legend-box lv4"></div>
+                <span>多</span>
+            </div>
+        </div>
+
+        <!-- Session Log -->
+        <div class="card">
+            <div class="card-title">📋 最近训练记录</div>
+            <div class="session-list" id="sessionList">
+                <div class="empty-state" id="emptyState">暂无训练数据</div>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        let trendChart = null;
+
+        async function loadData() {
+            try {
+                const res = await fetch('/api/training_log');
+                if (!res.ok) throw new Error('API 不可用');
+                const log = await res.json();
+                renderAll(log);
+            } catch (e) {
+                console.error('加载训练数据失败:', e);
+                // 展示空状态
+                renderAll({});
+            }
+        }
+
+        function renderAll(log) {
+            const dates = Object.keys(log).sort();
+            if (dates.length === 0) return;
+
+            // === Summary ===
+            let totalGood = 0, totalFailed = 0;
+            dates.forEach(d => {
+                const sessions = log[d]?.sessions || [];
+                sessions.forEach(s => { totalGood += s.good || 0; totalFailed += s.failed || 0; });
+            });
+            document.getElementById('totalDays').textContent = dates.length;
+            document.getElementById('totalGood').textContent = totalGood;
+            document.getElementById('totalFailed').textContent = totalFailed;
+            const total = totalGood + totalFailed;
+            document.getElementById('totalRate').textContent = total > 0
+                ? Math.round(totalGood / total * 100) + '%' : '—';
+
+            // === Trend Chart ===
+            const recentDates = dates.slice(-14);
+            const goodData = [], failedData = [], rateData = [];
+            recentDates.forEach(d => {
+                const sessions = log[d]?.sessions || [];
+                let g = 0, f = 0;
+                sessions.forEach(s => { g += s.good || 0; f += s.failed || 0; });
+                goodData.push(g);
+                failedData.push(f);
+                const t = g + f;
+                rateData.push(t > 0 ? Math.round(g / t * 100) : null);
+            });
+
+            const ctx = document.getElementById('trendChart').getContext('2d');
+            if (trendChart) trendChart.destroy();
+            trendChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: recentDates.map(d => d.slice(5)),
+                    datasets: [
+                        {
+                            label: '标准深蹲',
+                            data: goodData,
+                            backgroundColor: 'rgba(52, 211, 153, 0.6)',
+                            borderColor: 'rgba(52, 211, 153, 1)',
+                            borderWidth: 1, borderRadius: 4,
+                        },
+                        {
+                            label: '违规半蹲',
+                            data: failedData,
+                            backgroundColor: 'rgba(248, 113, 113, 0.6)',
+                            borderColor: 'rgba(248, 113, 113, 1)',
+                            borderWidth: 1, borderRadius: 4,
+                        },
+                        {
+                            label: '合格率 %',
+                            type: 'line',
+                            data: rateData,
+                            borderColor: 'rgba(251, 191, 36, 1)',
+                            backgroundColor: 'rgba(251, 191, 36, 0.1)',
+                            borderWidth: 2, pointRadius: 4,
+                            yAxisID: 'y1', tension: 0.3, fill: true,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: {
+                        legend: { labels: { color: '#8892b0', font: { size: 11 } } }
+                    },
+                    scales: {
+                        x: { ticks: { color: '#8892b0' }, grid: { color: 'rgba(99,115,155,0.1)' } },
+                        y: { ticks: { color: '#8892b0' }, grid: { color: 'rgba(99,115,155,0.1)' }, beginAtZero: true },
+                        y1: {
+                            position: 'right', min: 0, max: 100,
+                            ticks: { color: '#fbbf24', callback: v => v + '%' },
+                            grid: { drawOnChartArea: false }
+                        }
+                    }
+                }
+            });
+
+            // === Heatmap Calendar ===
+            const heatmapGrid = document.getElementById('heatmapGrid');
+            heatmapGrid.innerHTML = '';
+            const dayLabels = ['日', '一', '二', '三', '四', '五', '六'];
+            dayLabels.forEach(d => {
+                const cell = document.createElement('div');
+                cell.className = 'heatmap-cell header-cell';
+                cell.textContent = d;
+                heatmapGrid.appendChild(cell);
+            });
+
+            const today = new Date();
+            const todayStr = today.toISOString().slice(0, 10);
+            // 回退 28 天
+            for (let i = 27; i >= 0; i--) {
+                const d = new Date(today);
+                d.setDate(d.getDate() - i);
+                const dateStr = d.toISOString().slice(0, 10);
+                const dayNum = d.getDate();
+
+                let count = 0;
+                if (log[dateStr]) {
+                    const sessions = log[dateStr].sessions || [];
+                    sessions.forEach(s => { count += (s.good || 0) + (s.failed || 0); });
+                }
+
+                const cell = document.createElement('div');
+                let lvl = count === 0 ? 'lv0' : count < 10 ? 'lv1' : count < 25 ? 'lv2' : count < 50 ? 'lv3' : 'lv4';
+                cell.className = `heatmap-cell ${lvl}` + (dateStr === todayStr ? ' today' : '');
+                cell.textContent = dayNum;
+                cell.title = `${dateStr}: ${count} 次动作`;
+                heatmapGrid.appendChild(cell);
+            }
+
+            // === Session list ===
+            const sessionList = document.getElementById('sessionList');
+            const emptyEl = document.getElementById('emptyState');
+            if (emptyEl) emptyEl.remove();
+            sessionList.innerHTML = '';
+
+            const reversedDates = [...dates].reverse().slice(0, 10);
+            reversedDates.forEach(d => {
+                const sessions = log[d]?.sessions || [];
+                sessions.reverse().forEach(s => {
+                    const item = document.createElement('div');
+                    item.className = 'session-item';
+                    item.innerHTML = `
+                        <span class="time">${d} ${s.time || ''}</span>
+                        <div class="stats">
+                            <span class="good">✅ ${s.good || 0}</span>
+                            <span class="bad">⚠️ ${s.failed || 0}</span>
+                        </div>
+                    `;
+                    sessionList.appendChild(item);
+                });
+            });
+        }
+
+        loadData();
+        // 每 30 秒刷新
+        setInterval(loadData, 30000);
+    </script>
+</body>
+</html>

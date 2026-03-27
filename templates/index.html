@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IronBuddy — 智能私教控制台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-primary: #0a0e17;
+            --bg-card: rgba(22, 27, 45, 0.85);
+            --bg-glass: rgba(30, 38, 60, 0.6);
+            --border: rgba(99, 115, 155, 0.25);
+            --text-primary: #e2e8f0;
+            --text-secondary: #8892b0;
+            --accent-blue: #60a5fa;
+            --accent-green: #34d399;
+            --accent-red: #f87171;
+            --accent-amber: #fbbf24;
+            --accent-purple: #a78bfa;
+            --glow-blue: rgba(96, 165, 250, 0.15);
+        }
+
+        body {
+            background: var(--bg-primary);
+            background-image:
+                radial-gradient(ellipse at 20% 50%, rgba(96,165,250,0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(167,139,250,0.04) 0%, transparent 50%);
+            color: var(--text-primary);
+            font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ===== Header ===== */
+        .header {
+            padding: 16px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+            backdrop-filter: blur(12px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(10, 14, 23, 0.8);
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .logo-icon {
+            width: 34px; height: 34px;
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+            border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 17px;
+        }
+        .header h1 { font-size: 1.2em; font-weight: 600; letter-spacing: 0.5px; }
+        .header h1 span { color: var(--accent-blue); }
+
+        .connection-badge {
+            display: flex; align-items: center; gap: 8px;
+            padding: 5px 12px; border-radius: 20px;
+            font-size: 0.78em; font-weight: 600; border: 1px solid;
+        }
+        .connection-badge.online {
+            color: var(--accent-green);
+            border-color: rgba(52, 211, 153, 0.3);
+            background: rgba(52, 211, 153, 0.08);
+        }
+        .connection-badge.offline {
+            color: var(--accent-red);
+            border-color: rgba(248, 113, 113, 0.3);
+            background: rgba(248, 113, 113, 0.08);
+        }
+        .pulse-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); }
+            50% { box-shadow: 0 0 0 5px rgba(52, 211, 153, 0); }
+        }
+
+        /* ===== Main Layout ===== */
+        .dashboard {
+            display: grid;
+            grid-template-columns: 1fr 320px 260px;
+            grid-template-rows: auto 1fr;
+            gap: 14px;
+            padding: 16px 20px;
+            max-width: 1480px;
+            margin: 0 auto;
+        }
+
+        /* ===== Video Panel ===== */
+        .video-panel {
+            grid-row: 1 / 3;
+            position: relative;
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+            background: #000;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+        }
+        .video-feed {
+            display: block;
+            width: 100%;
+            height: auto;
+            min-height: 400px;
+            object-fit: cover;
+            /* CSS 平滑过渡掩盖低 FPS 顿挫感 */
+            transition: opacity 0.15s ease;
+        }
+
+        /* HUD overlay (状态 + 角度 + FPS) */
+        .fsm-hud {
+            position: absolute;
+            top: 12px; left: 12px; right: 12px;
+            display: flex;
+            justify-content: space-between;
+            pointer-events: none;
+            z-index: 10;
+        }
+        .hud-card {
+            backdrop-filter: blur(14px);
+            background: rgba(0, 0, 0, 0.55);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 10px 14px;
+            text-align: center;
+            min-width: 80px;
+        }
+        .hud-label {
+            font-size: 0.65em; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 1.2px;
+            margin-bottom: 3px;
+        }
+        .hud-value { font-size: 1.6em; font-weight: 700; line-height: 1.1; }
+        .hud-state { font-size: 0.9em; font-weight: 600; }
+        .hud-fps {
+            font-size: 0.75em; font-weight: 600;
+            color: var(--accent-green);
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* ===== Sidebar ===== */
+        .sidebar { display: flex; flex-direction: column; gap: 14px; }
+
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        }
+        .card-title {
+            font-size: 0.72em; font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 1.5px;
+            margin-bottom: 12px;
+            display: flex; align-items: center; gap: 7px;
+        }
+        .card-title .icon { font-size: 1.1em; }
+
+        /* Stats Grid */
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .stat-item {
+            background: var(--bg-glass);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+        .stat-item:hover {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 12px var(--glow-blue);
+        }
+        .stat-label {
+            font-size: 0.68em; color: var(--text-secondary);
+            text-transform: uppercase; letter-spacing: 1px;
+            margin-bottom: 4px;
+        }
+        .stat-value { font-size: 1.8em; font-weight: 700; }
+        .stat-value.green { color: var(--accent-green); }
+        .stat-value.red { color: var(--accent-red); }
+        .stat-value.blue { color: var(--accent-blue); }
+        .stat-value.amber { color: var(--accent-amber); }
+
+        /* Angle Gauge */
+        .angle-gauge {
+            width: 100%; height: 6px;
+            background: var(--bg-glass);
+            border-radius: 3px;
+            margin-top: 8px; overflow: hidden;
+        }
+        .angle-fill {
+            height: 100%; border-radius: 3px;
+            transition: width 0.3s, background 0.3s;
+            background: var(--accent-blue);
+        }
+
+        /* Coach Chat */
+        .coach-card { flex: 1; display: flex; flex-direction: column; min-height: 180px; }
+        .chat-area {
+            flex: 1; overflow-y: auto; max-height: 240px;
+            padding-right: 4px;
+        }
+        .chat-area::-webkit-scrollbar { width: 3px; }
+        .chat-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+        .chat-bubble {
+            background: var(--bg-glass);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 10px 12px; margin-bottom: 8px;
+            font-size: 0.85em; line-height: 1.6;
+            animation: fadeIn 0.3s ease;
+        }
+        .chat-bubble .time-tag {
+            font-size: 0.68em; color: var(--text-secondary);
+            margin-top: 4px; display: block; text-align: right;
+        }
+        .chat-bubble.highlight {
+            border-color: var(--accent-purple);
+            background: rgba(167, 139, 250, 0.08);
+        }
+        .chat-placeholder {
+            color: var(--text-secondary);
+            font-size: 0.82em; text-align: center;
+            padding: 24px 8px; line-height: 1.6;
+        }
+        .chat-bubble.user-bubble {
+            background: rgba(96, 165, 250, 0.12);
+            border-color: var(--accent-blue);
+            text-align: right;
+        }
+        .chat-bubble.user-bubble .bubble-label {
+            font-size: 0.7em; color: var(--accent-blue); font-weight: 600;
+        }
+        .chat-bubble.bot-bubble .bubble-label {
+            font-size: 0.7em; color: var(--accent-purple); font-weight: 600;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Voice Button */
+        .voice-controls {
+            display: flex; gap: 6px; margin-top: 8px;
+        }
+        .btn-voice {
+            flex: 0 0 auto; width: 44px; height: 44px;
+            border-radius: 50%; border: 2px solid var(--accent-green);
+            background: rgba(52, 211, 153, 0.1);
+            color: var(--accent-green); font-size: 1.2em;
+            cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .btn-voice:hover { background: rgba(52, 211, 153, 0.2); }
+        .btn-voice.recording {
+            border-color: var(--accent-red); color: var(--accent-red);
+            background: rgba(248, 113, 113, 0.15);
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        .audio-wave { display: inline-flex; align-items: center; gap: 2px; height: 12px; margin-left: 6px; }
+        .audio-wave span { width: 3px; background: var(--accent-purple); border-radius: 2px; animation: bounce 0.4s infinite alternate; }
+        .audio-wave span:nth-child(2) { animation-delay: 0.1s; }
+        .audio-wave span:nth-child(3) { animation-delay: 0.2s; }
+        .audio-wave span:nth-child(4) { animation-delay: 0.15s; }
+        @keyframes bounce { 0% { height: 3px; } 100% { height: 14px; } }
+
+        .chat-input {
+            flex: 1; padding: 10px 12px; border-radius: 8px;
+            border: 1px solid var(--border); background: var(--bg-glass);
+            color: var(--text-primary); font-family: inherit; font-size: 0.82em;
+            outline: none; transition: border 0.2s;
+        }
+        .chat-input:focus { border-color: var(--accent-blue); }
+        .btn-send {
+            flex: 0 0 auto; padding: 10px 14px; border-radius: 8px;
+            border: none; background: var(--accent-blue); color: #fff;
+            font-family: inherit; font-weight: 600; cursor: pointer;
+            font-size: 0.82em; transition: all 0.2s;
+        }
+        .btn-send:hover { background: #4a94e8; }
+
+        /* Buttons */
+        .btn {
+            width: 100%; padding: 10px; border-radius: 8px;
+            font-family: inherit; font-size: 0.8em; font-weight: 600;
+            cursor: pointer; transition: all 0.2s;
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+        .btn-primary {
+            border: 1px solid var(--border);
+            background: var(--bg-glass);
+            color: var(--text-primary);
+        }
+        .btn-primary:hover {
+            background: rgba(96, 165, 250, 0.1);
+            border-color: var(--accent-blue);
+        }
+        .btn-danger {
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            background: rgba(248, 113, 113, 0.06);
+            color: var(--accent-red);
+            margin-top: 6px;
+        }
+        .btn-danger:hover {
+            background: rgba(248, 113, 113, 0.15);
+            border-color: var(--accent-red);
+        }
+
+        /* Countdown */
+        .countdown-bar {
+            display: flex; align-items: center; gap: 6px;
+            padding: 6px 10px;
+            background: var(--bg-glass);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 0.72em; color: var(--text-secondary);
+            transition: opacity 0.3s;
+        }
+        .countdown-bar .cd-fill {
+            flex: 1; height: 3px; background: var(--bg-glass);
+            border-radius: 2px; overflow: hidden;
+        }
+        .countdown-bar .cd-fill-inner {
+            height: 100%; background: var(--accent-purple);
+            border-radius: 2px; transition: width 0.5s;
+        }
+
+        /* ===== V2: Muscle Heatmap ===== */
+        .heatmap-panel { display: flex; flex-direction: column; gap: 10px; }
+        .heatmap-body {
+            position: relative;
+            width: 200px; height: 400px;
+            margin: 0 auto;
+        }
+        .heatmap-body svg { width: 100%; height: 100%; }
+        .heatmap-body .muscle-zone {
+            fill: rgba(100,120,160,0.15);
+            stroke: rgba(100,120,160,0.3);
+            stroke-width: 0.5;
+            transition: fill 0.5s ease;
+        }
+        .muscle-bar-list { display: flex; flex-direction: column; gap: 4px; }
+        .muscle-bar {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 0.7em;
+        }
+        .muscle-bar-name { width: 68px; text-align: right; color: var(--text-secondary); font-size: 0.85em; }
+        .muscle-bar-track {
+            flex: 1; height: 6px; background: var(--bg-glass);
+            border-radius: 3px; overflow: hidden;
+        }
+        .muscle-bar-fill {
+            height: 100%; border-radius: 3px;
+            transition: width 0.5s, background 0.5s;
+            background: var(--accent-blue);
+        }
+        .muscle-bar-pct { width: 28px; font-size: 0.85em; color: var(--text-secondary); }
+        .compensation-warn {
+            background: rgba(248, 113, 113, 0.08);
+            border: 1px solid rgba(248, 113, 113, 0.3);
+            border-radius: 6px; padding: 6px 10px;
+            font-size: 0.75em; color: var(--accent-red);
+            animation: fadeIn 0.3s ease;
+        }
+
+        /* ===== V2: Config Modal ===== */
+        .modal-overlay {
+            display: none; position: fixed; inset: 0;
+            background: rgba(0,0,0,0.6); z-index: 1000;
+            align-items: center; justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-box {
+            background: var(--bg-card); border: 1px solid var(--border);
+            border-radius: 14px; padding: 24px; width: 340px;
+            backdrop-filter: blur(20px);
+        }
+        .modal-box h2 { font-size: 1.1em; margin-bottom: 16px; }
+        .modal-box label { display: block; font-size: 0.78em; color: var(--text-secondary); margin: 10px 0 4px; }
+        .modal-box input, .modal-box select {
+            width: 100%; padding: 8px 10px; border-radius: 6px;
+            border: 1px solid var(--border); background: var(--bg-glass);
+            color: var(--text-primary); font-family: inherit; font-size: 0.85em;
+            outline: none;
+        }
+        .modal-box input:focus, .modal-box select:focus { border-color: var(--accent-blue); }
+        .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
+        .modal-actions .btn { flex: 1; }
+
+        /* Responsive */
+        @media (max-width: 1100px) {
+            .dashboard { grid-template-columns: 1fr 320px; }
+            .heatmap-panel { display: none; }
+        }
+        @media (max-width: 900px) {
+            .dashboard { grid-template-columns: 1fr; }
+            .video-panel { grid-row: auto; }
+        }
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <div class="header-left">
+            <div class="logo-icon">🏋</div>
+            <h1>Iron<span>Buddy</span></h1>
+        </div>
+        <div class="connection-badge online" id="connBadge">
+            <div class="pulse-dot"></div>
+            <span id="connText">系统在线</span>
+        </div>
+        <button class="btn btn-primary" style="padding: 5px 14px; width: auto; font-size: 0.75em;" onclick="document.getElementById('configModal').classList.add('show')">⚙️ 训练配置</button>
+    </header>
+
+    <main class="dashboard">
+
+        <!-- Video Panel -->
+        <section class="video-panel" id="videoPanel">
+            <img class="video-feed" id="videoFeed" src="/video_feed" alt="实时画面">
+
+            <div class="fsm-hud">
+                <div class="hud-card">
+                    <div class="hud-label">状态</div>
+                    <div class="hud-state" id="hudState" style="color: var(--accent-blue);">等待中</div>
+                </div>
+                <div class="hud-card">
+                    <div class="hud-label">膝盖角度</div>
+                    <div class="hud-value" id="hudAngle" style="color: var(--text-primary);">—</div>
+                </div>
+                <div class="hud-card">
+                    <div class="hud-label">浏览器</div>
+                    <div class="hud-fps" id="hudFps">— FPS / — KB</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+
+            <!-- Stats Card -->
+            <div class="card">
+                <div class="card-title"><span class="icon">📊</span> 本组训练统计</div>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-label">标准深蹲</div>
+                        <div class="stat-value green" id="statGood">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">违规半蹲</div>
+                        <div class="stat-value red" id="statFailed">0</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">当前角度</div>
+                        <div class="stat-value blue" id="statAngle">—</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-label">合格率</div>
+                        <div class="stat-value amber" id="statRate">—</div>
+                    </div>
+                </div>
+                <div class="angle-gauge">
+                    <div class="angle-fill" id="angleBar" style="width: 0%;"></div>
+                </div>
+                <button class="btn btn-danger" onclick="resetSession()">🔄 重置本组计数</button>
+                <button class="btn btn-primary" onclick="triggerDeepseek()" style="margin-top: 6px;">📝 生成本组点评</button>
+            </div>
+
+            <!-- Voice Card: 语音对话 (WeChat 风格) -->
+            <div class="card coach-card">
+                <div class="card-title">
+                    <span class="icon">🎤</span> 语音对话
+                    <span class="status-indicator" id="voiceIndicator" style="margin-left: auto; font-size: 0.8em; color: var(--text-secondary);">
+                        待机中，说“教练”唤醒
+                    </span>
+                </div>
+                <div class="status-indicator" style="font-size:0.8rem;opacity:0.6;margin-top:4px;">唤醒后，教练说完“我在”即可随意对话，停顿2秒自动发送。</div>
+                <div class="chat-area" id="chatArea" style="max-height: 200px;">
+                    <div class="chat-placeholder" id="chatPlaceholder">
+                        对着摄像头说“教练”开始对话
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- V2: Muscle Heatmap Panel -->
+        <aside class="heatmap-panel">
+            <div class="card">
+                <div class="card-title"><span class="icon">🔥</span> 肌肉激活热力图</div>
+                <div class="heatmap-body">
+                    <svg viewBox="0 0 200 400" xmlns="http://www.w3.org/2000/svg">
+                        <!-- 人体轮廓 -->
+                        <ellipse cx="100" cy="30" rx="22" ry="28" fill="rgba(200,210,230,0.15)" stroke="rgba(200,210,230,0.3)" stroke-width="0.5"/>
+                        <!-- 躯干 -->
+                        <path d="M78,58 Q75,60 70,80 L65,150 Q63,160 72,165 L128,165 Q137,160 135,150 L130,80 Q125,60 122,58 Z" fill="rgba(200,210,230,0.08)" stroke="rgba(200,210,230,0.2)" stroke-width="0.5"/>
+                        <!-- 肌肉区域 -->
+                        <rect class="muscle-zone" id="mz-anterior_deltoid" x="60" y="58" width="18" height="22" rx="4" />
+                        <rect class="muscle-zone" id="mz-anterior_deltoid-r" x="122" y="58" width="18" height="22" rx="4" />
+                        <rect class="muscle-zone" id="mz-biceps" x="52" y="82" width="14" height="30" rx="4" />
+                        <rect class="muscle-zone" id="mz-biceps-r" x="134" y="82" width="14" height="30" rx="4" />
+                        <rect class="muscle-zone" id="mz-forearm_flexors" x="48" y="114" width="12" height="28" rx="3" />
+                        <rect class="muscle-zone" id="mz-forearm_flexors-r" x="140" y="114" width="12" height="28" rx="3" />
+                        <rect class="muscle-zone" id="mz-abs" x="82" y="95" width="36" height="55" rx="6" />
+                        <rect class="muscle-zone" id="mz-trapezius" x="78" y="58" width="44" height="20" rx="5" />
+                        <rect class="muscle-zone" id="mz-quadriceps" x="72" y="170" width="22" height="60" rx="6" />
+                        <rect class="muscle-zone" id="mz-quadriceps-r" x="106" y="170" width="22" height="60" rx="6" />
+                        <rect class="muscle-zone" id="mz-hip_adductors" x="94" y="170" width="12" height="40" rx="3" />
+                        <rect class="muscle-zone" id="mz-glutes" x="74" y="148" width="52" height="24" rx="8" />
+                        <rect class="muscle-zone" id="mz-hamstrings" x="73" y="195" width="20" height="50" rx="5" />
+                        <rect class="muscle-zone" id="mz-hamstrings-r" x="107" y="195" width="20" height="50" rx="5" />
+                        <rect class="muscle-zone" id="mz-calves" x="75" y="260" width="16" height="50" rx="5" />
+                        <rect class="muscle-zone" id="mz-calves-r" x="109" y="260" width="16" height="50" rx="5" />
+                        <rect class="muscle-zone" id="mz-erector_spinae" x="88" y="80" width="24" height="60" rx="5" />
+                    </svg>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-title"><span class="icon">📊</span> 激活强度</div>
+                <div class="muscle-bar-list" id="muscleBarList"></div>
+                <div id="compensationWarnings" style="margin-top: 8px;"></div>
+                <div style="margin-top: 6px; font-size: 0.65em; color: var(--text-secondary);" id="liftingPerf"></div>
+            </div>
+        </aside>
+    </main>
+
+    <!-- V2: Training Config Modal -->
+    <div class="modal-overlay" id="configModal">
+        <div class="modal-box">
+            <h2>⚙️ 训练配置</h2>
+            <label>身高 (cm)</label>
+            <input type="number" id="cfgHeight" value="175" min="100" max="220">
+            <label>体重 (kg)</label>
+            <input type="number" id="cfgWeight" value="70" min="30" max="200">
+            <label>训练动作</label>
+            <select id="cfgExercise">
+                <option value="squat">深蹲</option>
+                <option value="bicep_curl">哑铃弯举</option>
+            </select>
+            <label>器材重量 (kg, 无则填 0)</label>
+            <input type="number" id="cfgEquipment" value="0" min="0" max="100">
+            <label>性别</label>
+            <select id="cfgGender">
+                <option value="male">男</option>
+                <option value="female">女</option>
+            </select>
+            <div class="modal-actions">
+                <button class="btn btn-primary" onclick="document.getElementById('configModal').classList.remove('show')">取消</button>
+                <button class="btn btn-primary" style="background: var(--accent-blue); color: #fff;" onclick="submitProfile()">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== State mapping =====
+        const STATE_MAP = {
+            'NO_PERSON':  { text: '等待入镜', color: 'var(--text-secondary)' },
+            'IDLE':       { text: '站立待命', color: 'var(--accent-blue)' },
+            'DESCENDING': { text: '下蹲中 ⬇', color: 'var(--accent-amber)' },
+            'ASCENDING':  { text: '起身中 ⬆', color: 'var(--accent-green)' },
+            'BOTTOM':     { text: '触底 ✅', color: 'var(--accent-green)' },
+            'INVALID_ASCENT': { text: '⚠ 半蹲违规', color: 'var(--accent-red)' }
+        };
+
+        // ===== FSM State Polling (500ms) =====
+        let connectionAlive = true;
+        let countdownStart = null;
+
+        setInterval(async () => {
+            try {
+                const res = await fetch('/state_feed');
+                if (!res.ok) throw new Error();
+                const d = await res.json();
+
+                const stateInfo = STATE_MAP[d.state] || STATE_MAP['NO_PERSON'];
+                document.getElementById('hudState').textContent = stateInfo.text;
+                document.getElementById('hudState').style.color = stateInfo.color;
+
+                document.getElementById('statGood').textContent = d.good;
+                document.getElementById('statFailed').textContent = d.failed;
+                document.getElementById('hudAngle').textContent = d.angle > 0 ? d.angle + '°' : '—';
+                document.getElementById('statAngle').textContent = d.angle > 0 ? d.angle + '°' : '—';
+
+                const total = d.good + d.failed;
+                document.getElementById('statRate').textContent = total > 0
+                    ? Math.round((d.good / total) * 100) + '%' : '—';
+
+                const pct = Math.max(0, Math.min(100, ((180 - d.angle) / 180) * 100));
+                const bar = document.getElementById('angleBar');
+                bar.style.width = pct + '%';
+                bar.style.background = d.angle < 100 ? 'var(--accent-green)'
+                    : d.angle < 155 ? 'var(--accent-amber)' : 'var(--accent-blue)';
+
+                const voiceInd = document.getElementById('voiceIndicator');
+                if (d.chat_active) {
+                    voiceInd.innerHTML = '正在聆听... <div class="audio-wave"><span></span><span></span><span></span><span></span></div>';
+                    voiceInd.style.color = "var(--accent-purple)";
+                } else {
+                    voiceInd.innerHTML = '待机中，说“教练”唤醒';
+                    voiceInd.style.color = "var(--text-secondary)";
+                }
+
+                if (!connectionAlive) {
+                    connectionAlive = true;
+                    document.getElementById('connBadge').className = 'connection-badge online';
+                    document.getElementById('connText').textContent = '系统在线';
+                }
+            } catch (e) {
+                if (connectionAlive) {
+                    connectionAlive = false;
+                    document.getElementById('connBadge').className = 'connection-badge offline';
+                    document.getElementById('connText').textContent = '连接断开';
+                }
+            }
+        }, 500);
+
+        // ===== Reset / Trigger =====
+        async function resetSession() {
+            if (!confirm('确认清零本组训练数据？')) return;
+            try {
+                await fetch('/reset_session', { method: 'POST' });
+                lastReply = '';
+                document.getElementById('chatArea').innerHTML =
+                    '<div class="chat-placeholder">点击「生成本组点评」<br>获取教练反馈 💪</div>';
+            } catch (e) {}
+        }
+
+        async function triggerDeepseek() {
+            try { await fetch('/trigger_deepseek', { method: 'POST' }); } catch (e) {}
+        }
+
+        // ===== Master Chat Feed (Replies + User Input + Drafts) =====
+        let lastReply = '';
+        let lastChatReplyTs = 0;
+        let lastChatInputTs = 0;
+        let lastDraft = '';
+
+        // DeepSeek Training Reply Polling
+        setInterval(async () => {
+            try {
+                const res = await fetch('/llm_reply_feed');
+                if (!res.ok) return;
+                const d = await res.json();
+                if (d.reply && d.reply.trim().length > 0 && d.reply !== lastReply) {
+                    lastReply = d.reply;
+                    appendChatBubble('教练 (总结)', d.reply, 'bot');
+                }
+            } catch (e) {}
+        }, 2000);
+
+        function appendChatBubble(role, text, type) {
+            const chatArea = document.getElementById('chatArea');
+            const ph = document.getElementById('chatPlaceholder');
+            if (ph) ph.remove();
+
+            // 如果有草稿气泡，把正式气泡插在草稿前面
+            const draftNode = document.getElementById('draftBubble');
+
+            const bubble = document.createElement('div');
+            bubble.className = `chat-bubble ${type}-bubble highlight`;
+            const now = new Date();
+            const ts = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+            bubble.innerHTML = `<div class="bubble-label">${role}</div>` + text + `<span class="time-tag">${ts}</span>`;
+            
+            if (draftNode) {
+                chatArea.insertBefore(bubble, draftNode);
+            } else {
+                chatArea.appendChild(bubble);
+            }
+            chatArea.scrollTop = chatArea.scrollHeight;
+            setTimeout(() => bubble.classList.remove('highlight'), 5000);
+        }
+
+        setInterval(async () => {
+            // 获取聊天回复
+            try {
+                const res = await fetch('/api/chat_reply');
+                if (res.ok) {
+                    const d = await res.json();
+                    if (d.reply && d.ts > lastChatReplyTs) {
+                        lastChatReplyTs = d.ts;
+                        appendChatBubble('教练', d.reply, 'bot');
+                    }
+                }
+            } catch (e) {}
+
+            // 获取用户最终输入
+            try {
+                const res = await fetch('/api/chat_input');
+                if (res.ok) {
+                    const d = await res.json();
+                    if (d.text && d.ts > lastChatInputTs) {
+                        lastChatInputTs = d.ts;
+                        
+                        // 正式接收到后，清空草稿
+                        lastDraft = '';
+                        const draftNode = document.getElementById('draftBubble');
+                        if (draftNode) draftNode.remove();
+                        
+                        appendChatBubble('我', d.text, 'user');
+                    }
+                }
+            } catch (e) {}
+            
+            // 获取用户正在说的草稿 (每 1.5s)
+            try {
+                const res = await fetch('/api/chat_draft');
+                if (res.ok) {
+                    const d = await res.json();
+                    if (d.text && d.text !== lastDraft) {
+                        lastDraft = d.text;
+                        const chatArea = document.getElementById('chatArea');
+                        const ph = document.getElementById('chatPlaceholder');
+                        if (ph) ph.remove();
+                        
+                        let draftNode = document.getElementById('draftBubble');
+                        if (!draftNode) {
+                            draftNode = document.createElement('div');
+                            draftNode.id = 'draftBubble';
+                            draftNode.className = 'chat-bubble user-bubble';
+                            draftNode.style.opacity = '0.7';
+                            chatArea.appendChild(draftNode);
+                        }
+                        draftNode.innerHTML = '<div class="bubble-label">我 (正在输入...)</div>' + d.text;
+                        chatArea.scrollTop = chatArea.scrollHeight;
+                    } else if (!d.text && lastDraft) {
+                        // 如果草稿被清空（例如已提交或者截断）
+                        lastDraft = '';
+                        const draftNode = document.getElementById('draftBubble');
+                        if (draftNode) draftNode.remove();
+                    }
+                }
+            } catch (e) {}
+        }, 1500);
+
+        // ===== Video: MJPEG 流 (V2.2) =====
+        // 浏览器原生解码 /video_feed MJPEG 流，无需 JS 轮询
+        (function() {
+            const feed = document.getElementById('videoFeed');
+            const fpsEl = document.getElementById('hudFps');
+            fpsEl.textContent = 'MJPEG 流';
+            fpsEl.style.color = 'var(--accent-green)';
+            // 监控流状态
+            feed.onerror = function() {
+                fpsEl.textContent = '流断开';
+                fpsEl.style.color = 'var(--accent-red)';
+                setTimeout(() => { feed.src = '/video_feed?t=' + Date.now(); }, 2000);
+            };
+        })();
+
+        // ===== V2: Muscle Activation Polling =====
+        const MUSCLE_CN = {
+            quadriceps:'股四头肌', glutes:'臀大肌', hamstrings:'腘绳肌', calves:'小腿肌',
+            erector_spinae:'竖脊肌', abs:'腹肌', hip_adductors:'髋内收肌',
+            biceps:'肱二头肌', brachialis:'肱肌', brachioradialis:'肱桡肌',
+            anterior_deltoid:'三角肌前束', trapezius:'斜方肌', forearm_flexors:'前臂屈肌',
+        };
+        const DISPLAY_MUSCLES = ['quadriceps','glutes','hamstrings','biceps','abs','erector_spinae','calves','anterior_deltoid','trapezius'];
+
+        function activationColor(pct) {
+            // 累积颜色渐变：灰 → 蓝 → 绿 → 橙 → 红
+            if (pct <= 0) return 'rgba(60,70,90,0.15)';
+            if (pct < 15) return 'rgba(100,120,160,0.3)';
+            if (pct < 30) return 'rgba(96,165,250,0.5)';
+            if (pct < 50) return 'rgba(52,211,153,0.6)';
+            if (pct < 70) return 'rgba(250,204,21,0.7)';
+            if (pct < 85) return 'rgba(251,146,60,0.8)';
+            return 'rgba(239,68,68,0.9)';
+        }
+
+        let _lastFlash = [];
+        function updateHeatmap(activations, flash, repCount) {
+            // SVG zones — 累积颜色
+            for (const [muscle, pct] of Object.entries(activations)) {
+                const isFlashing = flash && flash.includes(muscle);
+                const c = isFlashing ? 'rgba(255,255,255,0.9)' : activationColor(pct);
+                const el = document.getElementById('mz-' + muscle);
+                if (el) {
+                    el.style.fill = c;
+                    el.style.transition = isFlashing ? 'fill 0.1s' : 'fill 0.6s ease';
+                }
+                const elR = document.getElementById('mz-' + muscle + '-r');
+                if (elR) {
+                    elR.style.fill = c;
+                    elR.style.transition = isFlashing ? 'fill 0.1s' : 'fill 0.6s ease';
+                }
+            }
+            // Bar chart — 显示所有监测肌肉
+            const container = document.getElementById('muscleBarList');
+            container.innerHTML = '';
+            for (const m of DISPLAY_MUSCLES) {
+                const pct = activations[m] || 0;
+                const cn = MUSCLE_CN[m] || m;
+                const isFlashing = flash && flash.includes(m);
+                const barBg = isFlashing ? '#fff' : activationColor(pct);
+                container.innerHTML += `<div class="muscle-bar" style="${isFlashing ? 'background:rgba(255,255,255,0.1)' : ''}">
+                    <div class="muscle-bar-name">${cn}</div>
+                    <div class="muscle-bar-track"><div class="muscle-bar-fill" style="width:${Math.max(pct,2)}%;background:${barBg};transition:width 0.5s ease"></div></div>
+                    <div class="muscle-bar-pct">${pct}%</div>
+                </div>`;
+            }
+            // 动作计数
+            const repEl = document.getElementById('liftingPerf');
+            if (repEl && typeof repCount === 'number') {
+                repEl.textContent = `动作: ${repCount} 次`;
+            }
+        }
+
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/muscle_activation');
+                if (!res.ok) return;
+                const d = await res.json();
+                if (d.activations) updateHeatmap(d.activations, d.flash || [], d.rep_count || 0);
+                const warnEl = document.getElementById('compensationWarnings');
+                if (d.warnings && d.warnings.length > 0) {
+                    warnEl.innerHTML = d.warnings.map(w => `<div class="compensation-warn">${w}</div>`).join('');
+                } else {
+                    warnEl.innerHTML = '';
+                }
+            } catch(e) {}
+        }, 800);
+
+        // ===== V2: Submit Profile =====
+        async function submitProfile() {
+            const data = {
+                height_cm: parseInt(document.getElementById('cfgHeight').value),
+                weight_kg: parseInt(document.getElementById('cfgWeight').value),
+                exercise: document.getElementById('cfgExercise').value,
+                equipment_kg: parseInt(document.getElementById('cfgEquipment').value),
+                gender: document.getElementById('cfgGender').value,
+            };
+            try {
+                await fetch('/api/user_profile', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(data) });
+                document.getElementById('configModal').classList.remove('show');
+            } catch(e) { alert('提交失败: ' + e); }
+        }
+    </script>
+</body>
+</html>
