@@ -5,18 +5,16 @@ build/
 *.bin
 *.hex
 
-# Python
+# Python & JS
 __pycache__/
 *.pyc
 *.egg-info/
 .venv/
 venv/
-
-# Node.js
 node_modules/
 dist/
 
-# AI 模型文件 (太大，不入库)
+# AI 模型与重资产拦截
 *.onnx
 *.rknn
 *.pt
@@ -24,12 +22,10 @@ dist/
 *.tflite
 *.caffemodel
 
-# IDE
+# IDE & OS
 .vscode/
 .idea/
 *.swp
-
-# 系统文件
 .DS_Store
 Thumbs.db
 
@@ -38,12 +34,18 @@ Thumbs.db
 .env.local
 *.key
 
-# === V3.0 竞赛版追加 ===
+# === V3.0 专项竞技封锁区 ===
 models/
 backups/
 docs/hardware_ref/
 *.zip
 *.whl
 *.tar.gz
-__pycache__/
-*.pyc
+
+# 屏蔽大媒体素材与冗余流媒体测试记录
+*.mp4
+*.avi
+*.mav
+*.log
+streamer.log
+*.tmp

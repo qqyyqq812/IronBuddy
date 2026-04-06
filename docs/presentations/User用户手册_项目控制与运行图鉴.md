@@ -2,23 +2,29 @@
 
 本手册为 IronBuddy 系统的操作指南。所有服务的启动/停止已封装为自动化脚本。
 
-> ⚠️ 板子 IP 不固定（DHCP），每次启动前在手机热点页面确认！当前：`10.28.134.224`
+> ⚠️ 板子 IP 不固定（DHCP），每次启动前在手机热点页面确认！当前：`10.105.245.224`
 
 ---
 
 ## 一、自动化启停（推荐）
 
-### 启动全部服务
+### 启动全面服务 (板端全链路拉起)
 ```bash
-tclsh ~/projects/embedded-fullstack/tests/start_validation.tcl
+tclsh ~/projects/embedded-fullstack/start_validation.tcl
 ```
+*(注意：此命令将切断旧有进程，拉起 FSM、视觉后端以及最新的 V3 肌电 UDP 接收海关。)*
 
 ### 停止全部服务
 ```bash
-tclsh ~/projects/embedded-fullstack/tests/stop_validation.tcl
+tclsh ~/projects/embedded-fullstack/stop_validation.tcl
 ```
 
-> 以上两条命令在 WSL 终端中执行，会自动完成代码同步、OpenClaw 网关启动、SSH 隧道建立及板端全部服务拉起/清理。
+### ✅ [V3专属] PC 侧局域网物理欺骗启动 (无实体传感器外接时使用)
+当你身边没有队友开发的真实传感器时，可以在 WSL 中另开一个终端执行：
+```bash
+python3 ~/projects/embedded-fullstack/tests/mock_teammate_esp32.py
+```
+*(该命令将在跨网段直接向板端的 UDP 接收器倾泻逼真的深蹲肌肉包络数据以及代偿干扰流，让板端以为已外接了传感器，配合前端观察 FSM 的积分跳变)*
 
 ---
 
@@ -32,11 +38,11 @@ powershell.exe
 ### 手动 SSH 登入开发板（带通信隧道）
 在 PowerShell 中执行：
 ```powershell
-ssh -i C:\temp\id_rsa -R 18789:127.0.0.1:18789 -o StrictHostKeyChecking=no toybrick@10.28.134.224
+ssh -i C:\temp\id_rsa -R 18789:127.0.0.1:18789 -o StrictHostKeyChecking=no toybrick@10.123.123.224
 ```
 
 ### 打开前端监控面板
-浏览器访问：`http://10.28.134.224:5000/`
+浏览器访问：`http://10.105.245.224:5000/`
 
 ---
 
@@ -91,7 +97,7 @@ ip addr show wlan0
 ## 四、V2.2/V2.5 新功能
 
 ### 训练历史页面
-浏览器访问：`http://10.28.134.224:5000/history`
+浏览器访问：`http://10.105.245.224:5000/history`
 - 每日标准/违规趋势折线图（最近 14 天）
 - 28 天训练热力日历
 - 训练记录详情列表
@@ -100,24 +106,24 @@ ip addr show wlan0
 - 对摄像头说 **"教练"** 即可唤醒
 - 首次部署需运行 Vosk 模型安装：
   ```bash
-  ssh toybrick@10.28.134.224 "bash /home/toybrick/scripts/deploy_vosk.sh"
+  ssh toybrick@10.105.245.224 "bash /home/toybrick/scripts/deploy_vosk.sh"
   ```
 - V2.2 后**完全离线运行**，无需外网
 
 ### 视频流
 - V2.2 起使用 MJPEG 流，浏览器自动解码
-- 如果画面不出现，手动访问 `http://10.28.134.224:5000/video_feed` 检查
+- 如果画面不出现，手动访问 `http://10.105.245.224:5000/video_feed` 检查
 
 ### 性能测试
 ```bash
-ssh toybrick@10.28.134.224 "python3 /home/toybrick/tests/benchmark.py"
+ssh toybrick@10.105.245.224 "python3 /home/toybrick/tests/benchmark.py"
 ```
 
 ### supervisord 进程守护（V2.5）
 ```bash
 # 一键启动（替代 start_validation.sh 的进程管理部分）
-ssh toybrick@10.28.134.224 "supervisord -n -c /home/toybrick/deploy/ironbuddy-supervisor.conf &"
+ssh toybrick@10.105.245.224 "supervisord -n -c /home/toybrick/deploy/ironbuddy-supervisor.conf &"
 # 查看状态
-ssh toybrick@10.28.134.224 "supervisorctl -c /home/toybrick/deploy/ironbuddy-supervisor.conf status"
+ssh toybrick@10.105.245.224 "supervisorctl -c /home/toybrick/deploy/ironbuddy-supervisor.conf status"
 ```
 

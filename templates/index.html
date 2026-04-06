@@ -407,6 +407,30 @@
         .modal-actions { display: flex; gap: 8px; margin-top: 16px; }
         .modal-actions .btn { flex: 1; }
 
+        /* ===== V3: Kinematics Rig Styling ===== */
+        #torso { transition: transform 0.4s ease-out; }
+        #thigh-left { transform-origin: 83px 170px; transition: transform 0.4s ease-out; }
+        #thigh-right { transform-origin: 117px 170px; transition: transform 0.4s ease-out; }
+        #calf-left { transition: transform 0.4s ease-out; }
+        #calf-right { transition: transform 0.4s ease-out; }
+
+        /* ===== Minor Overlay (Watchdog) ===== */
+        .sensor-alert-toast {
+            position: fixed; top: 20px; right: 20px;
+            background: rgba(220, 38, 38, 0.9); z-index: 9999;
+            display: flex; align-items: center; gap: 12px;
+            padding: 12px 20px; border-radius: 10px; border: 1px solid rgba(255,100,100,0.5);
+            box-shadow: 0 10px 30px rgba(220, 38, 38, 0.3);
+            color: #fff; transform: translateX(120%); opacity: 0;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        .sensor-alert-toast.show { transform: translateX(0); opacity: 1; }
+        .sensor-alert-icon { font-size: 1.5em; animation: pulseIcon 1s infinite alternate; }
+        .sensor-alert-text { display: flex; flex-direction: column; }
+        .sensor-alert-title { font-weight: 700; font-size: 0.9em; margin-bottom: 2px; }
+        .sensor-alert-desc { font-size: 0.75em; opacity: 0.8; }
+        @keyframes pulseIcon { 0% { transform: scale(1); } 100% { transform: scale(1.2); } }
+
         /* Responsive */
         @media (max-width: 1100px) {
             .dashboard { grid-template-columns: 1fr 320px; }
@@ -481,8 +505,20 @@
                 <div class="angle-gauge">
                     <div class="angle-fill" id="angleBar" style="width: 0%;"></div>
                 </div>
-                <button class="btn btn-danger" onclick="resetSession()">🔄 重置本组计数</button>
-                <button class="btn btn-primary" onclick="triggerDeepseek()" style="margin-top: 6px;">📝 生成本组点评</button>
+
+                <!-- 疲劳积分进度条 -->
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-size: 0.72em; color: var(--text-secondary); text-transform: uppercase; font-weight: 600;">
+                    <span>肌肉疲劳积分 (目标 1500点)</span>
+                    <span id="statFatigueValue" style="color: var(--accent-purple); font-size: 1.4em;">0</span>
+                </div>
+                <div class="angle-gauge" style="margin-top: 6px; height: 8px; background: rgba(167, 139, 250, 0.1);">
+                    <div class="angle-fill" id="fatigueBar" style="width: 0%; background: var(--accent-purple); transition: width 0.5s ease, background 0.3s;"></div>
+                </div>
+
+                <div style="display: flex; gap: 8px; margin-top: 14px;">
+                    <button class="btn btn-danger" onclick="resetSession()">🔄 重置统计</button>
+                    <button class="btn btn-primary" onclick="triggerDeepseek()" style="background: rgba(96, 165, 250, 0.1); border-color: var(--accent-blue);">📝 生成本组点评</button>
+                </div>
             </div>
 
             <!-- Voice Card: 语音对话 (WeChat 风格) -->
@@ -499,6 +535,11 @@
                         对着摄像头说“教练”开始对话
                     </div>
                 </div>
+                <!-- 录音外置声卡调试信息输出 -->
+                <div style="margin-top: 10px; padding: 6px; background: rgba(0,0,0,0.3); border-radius: 6px; font-family: monospace; font-size: 0.7em; color: var(--text-secondary);">
+                    <div>🎤 Debug: <span id="micEnergy">检测中...</span> | 阈值: <span id="micThresh">0</span></div>
+                    <div style="margin-top: 2px;">💬 L-ASR: <span id="micText"></span></div>
+                </div>
             </div>
 
         </aside>
@@ -507,36 +548,33 @@
         <aside class="heatmap-panel">
             <div class="card">
                 <div class="card-title"><span class="icon">🔥</span> 肌肉激活热力图</div>
-                <div class="heatmap-body">
-                    <svg viewBox="0 0 200 400" xmlns="http://www.w3.org/2000/svg">
-                        <!-- 人体轮廓 -->
-                        <ellipse cx="100" cy="30" rx="22" ry="28" fill="rgba(200,210,230,0.15)" stroke="rgba(200,210,230,0.3)" stroke-width="0.5"/>
-                        <!-- 躯干 -->
-                        <path d="M78,58 Q75,60 70,80 L65,150 Q63,160 72,165 L128,165 Q137,160 135,150 L130,80 Q125,60 122,58 Z" fill="rgba(200,210,230,0.08)" stroke="rgba(200,210,230,0.2)" stroke-width="0.5"/>
-                        <!-- 肌肉区域 -->
-                        <rect class="muscle-zone" id="mz-anterior_deltoid" x="60" y="58" width="18" height="22" rx="4" />
-                        <rect class="muscle-zone" id="mz-anterior_deltoid-r" x="122" y="58" width="18" height="22" rx="4" />
-                        <rect class="muscle-zone" id="mz-biceps" x="52" y="82" width="14" height="30" rx="4" />
-                        <rect class="muscle-zone" id="mz-biceps-r" x="134" y="82" width="14" height="30" rx="4" />
-                        <rect class="muscle-zone" id="mz-forearm_flexors" x="48" y="114" width="12" height="28" rx="3" />
-                        <rect class="muscle-zone" id="mz-forearm_flexors-r" x="140" y="114" width="12" height="28" rx="3" />
-                        <rect class="muscle-zone" id="mz-abs" x="82" y="95" width="36" height="55" rx="6" />
-                        <rect class="muscle-zone" id="mz-trapezius" x="78" y="58" width="44" height="20" rx="5" />
-                        <rect class="muscle-zone" id="mz-quadriceps" x="72" y="170" width="22" height="60" rx="6" />
-                        <rect class="muscle-zone" id="mz-quadriceps-r" x="106" y="170" width="22" height="60" rx="6" />
-                        <rect class="muscle-zone" id="mz-hip_adductors" x="94" y="170" width="12" height="40" rx="3" />
-                        <rect class="muscle-zone" id="mz-glutes" x="74" y="148" width="52" height="24" rx="8" />
-                        <rect class="muscle-zone" id="mz-hamstrings" x="73" y="195" width="20" height="50" rx="5" />
-                        <rect class="muscle-zone" id="mz-hamstrings-r" x="107" y="195" width="20" height="50" rx="5" />
-                        <rect class="muscle-zone" id="mz-calves" x="75" y="260" width="16" height="50" rx="5" />
-                        <rect class="muscle-zone" id="mz-calves-r" x="109" y="260" width="16" height="50" rx="5" />
-                        <rect class="muscle-zone" id="mz-erector_spinae" x="88" y="80" width="24" height="60" rx="5" />
-                    </svg>
-                </div>
+                    <!-- CSS 2.5D Rig (侧向物理骨架与光效映射) -->
+                    <div id="css-rig-wrapper" style="position:relative; width: 100%; height: 350px; perspective: 800px; padding-top: 50px;">
+                        <div id="rig-glow" style="position:absolute; top:40%; left:50%; width:120px; height:200px; transform:translate(-50%, -50%); border-radius:50%; box-shadow: 0 0 20px rgba(52, 211, 153, 0.1); transition: box-shadow 0.2s ease-out; z-index:0;"></div>
+                        
+                        <!-- 悬挂重力链 -->
+                        <div id="rig-body" style="position:absolute; left:50%; top:20px; width:40px; transform: translateX(-50%); z-index:2; transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275);">
+                            <!-- 躯干核心 Torso -->
+                            <div style="width:36px; height:110px; background:linear-gradient(180deg, #60a5fa, #3b82f6); border-radius:18px; margin:0 auto; box-shadow: 0 0 15px rgba(96,165,250,0.5); position:relative;">
+                                <!-- 视觉辅助：头部锚点 -->
+                                <div style="position:absolute; top:-40px; left:-2px; width:40px; height:40px; border-radius:50%; border:3px solid #60a5fa; box-shadow:inset 0 0 10px #60a5fa, 0 0 15px #60a5fa;"></div>
+                            </div>
+                            
+                            <!-- 股骨 Thigh -->
+                            <div id="rig-thigh" style="position:absolute; top: 90px; left: 4px; width:28px; height:90px; background:linear-gradient(180deg, #3b82f6, #1d4ed8); border-radius:14px; transform-origin: 14px 14px; transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 0 15px rgba(59,130,246,0.5);">
+                                
+                                <!-- 胫骨 Calf -->
+                                <div id="rig-calf" style="position:absolute; top: 76px; left: 2px; width:24px; height:100px; background:linear-gradient(180deg, #1d4ed8, #1e3a8a); border-radius:12px; transform-origin: 12px 12px; transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 0 15px rgba(29,78,216,0.5);">
+                                    <!-- 脚底踏板 -->
+                                    <div style="position:absolute; bottom:0; left:-10px; width:44px; height:8px; background:#e2e8f0; border-radius:4px; box-shadow:0 0 10px #e2e8f0;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
             </div>
             <div class="card">
-                <div class="card-title"><span class="icon">📊</span> 激活强度</div>
-                <div class="muscle-bar-list" id="muscleBarList"></div>
+                <div class="card-title"><span class="icon">📊</span> 原生肌电微秒流 (1000Hz)</div>
+                <canvas id="emgWaveform" width="300" height="130" style="width: 100%; border-radius: 6px; background: rgba(30,40,50,0.4); margin-top: 10px;"></canvas>
                 <div id="compensationWarnings" style="margin-top: 8px;"></div>
                 <div style="margin-top: 6px; font-size: 0.65em; color: var(--text-secondary);" id="liftingPerf"></div>
             </div>
@@ -570,6 +608,15 @@
         </div>
     </div>
 
+    <!-- V3: Sensor Disconnect Toast -->
+    <div class="sensor-alert-toast" id="sensorAlertToast">
+        <div class="sensor-alert-icon">⚠️</div>
+        <div class="sensor-alert-text">
+            <div class="sensor-alert-title">肌电传感器失联</div>
+            <div class="sensor-alert-desc">UDP 信号超时，等待重连...</div>
+        </div>
+    </div>
+
     <script>
         // ===== State mapping =====
         const STATE_MAP = {
@@ -581,15 +628,58 @@
             'INVALID_ASCENT': { text: '⚠ 半蹲违规', color: 'var(--accent-red)' }
         };
 
-        // ===== FSM State Polling (500ms) =====
+        // ===== FSM State Polling (Web Worker) =====
         let connectionAlive = true;
         let countdownStart = null;
 
-        setInterval(async () => {
-            try {
-                const res = await fetch('/state_feed');
-                if (!res.ok) throw new Error();
-                const d = await res.json();
+        const workerCode = `
+            let timer = null;
+            self.onmessage = function(e) {
+                if (e.data === 'START') {
+                    if (timer) clearInterval(timer);
+                    timer = setInterval(async () => {
+                        try {
+                            const res = await fetch(location.origin + '/state_feed', { cache: 'no-store' });
+                            if (!res.ok) throw new Error();
+                            const d = await res.json();
+                            
+                            let voiceDebug = null;
+                            try {
+                                const vRes = await fetch(location.origin + '/api/voice_debug', { cache: 'no-store' });
+                                if (vRes.ok) voiceDebug = await vRes.json();
+                            } catch(e) {}
+                            
+                            self.postMessage({ type: 'DATA', payload: { d, voiceDebug } });
+                        } catch(err) {
+                            self.postMessage({ type: 'ERROR' });
+                        }
+                    }, 500);
+                } else if (e.data === 'FORCE') {
+                    // 主线程切回前台时，强行抓取一次平滑过渡
+                    (async () => {
+                        try {
+                            const res = await fetch(location.origin + '/state_feed', { cache: 'no-store' });
+                            if (res.ok) {
+                                const d = await res.json();
+                                let voiceDebug = null;
+                                try {
+                                    const vRes = await fetch(location.origin + '/api/voice_debug', { cache: 'no-store' });
+                                    if (vRes.ok) voiceDebug = await vRes.json();
+                                } catch(e) {}
+                                self.postMessage({ type: 'DATA', payload: { d, voiceDebug } });
+                            }
+                        } catch(e) {}
+                    })();
+                }
+            };
+        `;
+        
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const syncWorker = new Worker(URL.createObjectURL(blob));
+
+        syncWorker.onmessage = function(e) {
+            if (e.data.type === 'DATA') {
+                const { d, voiceDebug } = e.data.payload;
 
                 const stateInfo = STATE_MAP[d.state] || STATE_MAP['NO_PERSON'];
                 document.getElementById('hudState').textContent = stateInfo.text;
@@ -619,19 +709,66 @@
                     voiceInd.style.color = "var(--text-secondary)";
                 }
 
+                // 纯净剥离：完全不再参考 FSM 传来的 EMG 数值预测作弊
+                const isCheating = false; 
+                const currentFatigue = d.fatigue || 0;
+                KinematicsRig.updateSquatPose(d.angle, isCheating, currentFatigue);
+
+                const fatigueEl = document.getElementById('statFatigueValue');
+                const fatigueBar = document.getElementById('fatigueBar');
+                if (fatigueEl && fatigueBar) {
+                    fatigueEl.textContent = Math.round(currentFatigue);
+                    const fPct = Math.min(100, (currentFatigue / 1500) * 100);
+                    fatigueBar.style.width = fPct + '%';
+                    if (currentFatigue >= 1500) {
+                        fatigueBar.style.background = 'var(--accent-red)';
+                        fatigueEl.style.color = 'var(--accent-red)';
+                    } else if (currentFatigue > 1000) {
+                        fatigueBar.style.background = '#f97316';
+                        fatigueEl.style.color = '#f97316';
+                    } else {
+                        fatigueBar.style.background = 'var(--accent-purple)';
+                        fatigueEl.style.color = 'var(--accent-purple)';
+                    }
+                }
+
+                if (voiceDebug) {
+                    const eNode = document.getElementById('micEnergy');
+                    if(eNode) {
+                        eNode.textContent = parseInt(voiceDebug.energy);
+                        eNode.style.color = voiceDebug.energy >= voiceDebug.threshold ? 'var(--accent-green)' : 'var(--text-secondary)';
+                    }
+                    const tNode = document.getElementById('micThresh');
+                    if(tNode) tNode.textContent = voiceDebug.threshold;
+                    const txtNode = document.getElementById('micText');
+                    if(txtNode && voiceDebug.text) txtNode.textContent = voiceDebug.text.substring(0, 20);
+                }
+
                 if (!connectionAlive) {
                     connectionAlive = true;
                     document.getElementById('connBadge').className = 'connection-badge online';
                     document.getElementById('connText').textContent = '系统在线';
+                    const toast = document.getElementById('sensorAlertToast');
+                    if (toast) toast.classList.remove('show');
                 }
-            } catch (e) {
+            } else if (e.data.type === 'ERROR') {
                 if (connectionAlive) {
                     connectionAlive = false;
                     document.getElementById('connBadge').className = 'connection-badge offline';
                     document.getElementById('connText').textContent = '连接断开';
+                    const toast = document.getElementById('sensorAlertToast');
+                    if (toast) toast.classList.add('show');
                 }
             }
-        }, 500);
+        };
+
+        syncWorker.postMessage('START');
+        
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible") {
+                syncWorker.postMessage('FORCE'); // 秒拉齐
+            }
+        });
 
         // ===== Reset / Trigger =====
         async function resetSession() {
@@ -774,7 +911,7 @@
             biceps:'肱二头肌', brachialis:'肱肌', brachioradialis:'肱桡肌',
             anterior_deltoid:'三角肌前束', trapezius:'斜方肌', forearm_flexors:'前臂屈肌',
         };
-        const DISPLAY_MUSCLES = ['quadriceps','glutes','hamstrings','biceps','abs','erector_spinae','calves','anterior_deltoid','trapezius'];
+        const DISPLAY_MUSCLES = ['quadriceps', 'hamstrings', 'calves', 'biceps'];
 
         function activationColor(pct) {
             // 累积颜色渐变：灰 → 蓝 → 绿 → 橙 → 红
@@ -787,58 +924,132 @@
             return 'rgba(239,68,68,0.9)';
         }
 
-        let _lastFlash = [];
+        let _waveData = new Array(100).fill(0);
+
         function updateHeatmap(activations, flash, repCount) {
-            // SVG zones — 累积颜色
+            // SVG zones — 注入平滑过渡效果 (Node 2-2 呼吸感)
             for (const [muscle, pct] of Object.entries(activations)) {
                 const isFlashing = flash && flash.includes(muscle);
                 const c = isFlashing ? 'rgba(255,255,255,0.9)' : activationColor(pct);
+                
+                // SVG Body Map
                 const el = document.getElementById('mz-' + muscle);
                 if (el) {
                     el.style.fill = c;
-                    el.style.transition = isFlashing ? 'fill 0.1s' : 'fill 0.6s ease';
+                    el.style.transition = isFlashing ? 'fill 0.1s' : 'fill 0.2s ease';
                 }
                 const elR = document.getElementById('mz-' + muscle + '-r');
                 if (elR) {
                     elR.style.fill = c;
-                    elR.style.transition = isFlashing ? 'fill 0.1s' : 'fill 0.6s ease';
+                    elR.style.transition = isFlashing ? 'fill 0.1s' : 'fill 0.2s ease';
                 }
             }
-            // Bar chart — 显示所有监测肌肉
-            const container = document.getElementById('muscleBarList');
-            container.innerHTML = '';
-            for (const m of DISPLAY_MUSCLES) {
-                const pct = activations[m] || 0;
-                const cn = MUSCLE_CN[m] || m;
-                const isFlashing = flash && flash.includes(m);
-                const barBg = isFlashing ? '#fff' : activationColor(pct);
-                container.innerHTML += `<div class="muscle-bar" style="${isFlashing ? 'background:rgba(255,255,255,0.1)' : ''}">
-                    <div class="muscle-bar-name">${cn}</div>
-                    <div class="muscle-bar-track"><div class="muscle-bar-fill" style="width:${Math.max(pct,2)}%;background:${barBg};transition:width 0.5s ease"></div></div>
-                    <div class="muscle-bar-pct">${pct}%</div>
-                </div>`;
+
+            // Canvas Waveform 渲染
+            const canvas = document.getElementById('emgWaveform');
+            if (canvas) {
+                const ctx = canvas.getContext('2d');
+                const w = canvas.width;
+                const h = canvas.height;
+                
+                // 数据滑动
+                const currentVal = activations['quadriceps'] || 0;
+                _waveData.push(currentVal);
+                if (_waveData.length > 100) _waveData.shift();
+
+                // 绘制黑底
+                ctx.clearRect(0, 0, w, h);
+                
+                // 绘制网格线
+                ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                for(let i=1; i<4; i++) {
+                    ctx.moveTo(0, Math.floor(h * i / 4) + 0.5);
+                    ctx.lineTo(w, Math.floor(h * i / 4) + 0.5);
+                }
+                ctx.stroke();
+
+                // 绘制波形
+                ctx.beginPath();
+                ctx.lineWidth = 2.5;
+                for (let i = 0; i < _waveData.length; i++) {
+                    const x = (i / 99) * w;
+                    // Y值反转 (HTML canvas y向朝下)
+                    const y = h - ((_waveData[i] / 100) * h);
+                    if (i === 0) ctx.moveTo(x, y);
+                    else ctx.lineTo(x, y);
+                }
+                // 动态颜色：根据当前强度变色
+                ctx.strokeStyle = activationColor(currentVal);
+                ctx.stroke();
+                
+                // 填充渐变光晕
+                ctx.lineTo(w, h);
+                ctx.lineTo(0, h);
+                ctx.closePath();
+                const grad = ctx.createLinearGradient(0, 0, 0, h);
+                // 提取 RGBA 并改透明度，由于 activationColor 返回的是 rgba(... , val)，需要暴力替换结尾
+                let baseColorStr = activationColor(currentVal);
+                let softCol = baseColorStr.replace(/[\d.]+\)$/g, '0.35)');
+                if(!baseColorStr.includes('rgba')) { softCol = 'rgba(52,211,153,0.3)'; }
+                
+                grad.addColorStop(0, softCol);
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = grad;
+                ctx.fill();
             }
+
             // 动作计数
             const repEl = document.getElementById('liftingPerf');
             if (repEl && typeof repCount === 'number') {
-                repEl.textContent = `动作: ${repCount} 次`;
+                repEl.textContent = `动作: ${repCount} 次 (30FPS 高频推流)`;
             }
         }
 
+        // ===== Worker_2 高速轮询 & 100ms 看门狗重器 =====
+        let lastEmgStr = "";
+        let lastEmgAliveTs = Date.now();
+        const FATAL_TIMEOUT_MS = 150; // ESP32 发包 10ms，允许 15 包乱序丢失，超过150ms判离线
+
         setInterval(async () => {
             try {
-                const res = await fetch('/api/muscle_activation');
-                if (!res.ok) return;
+                // 以极低延迟直抽共享内存
+                const res = await fetch('/api/muscle_activation', { cache: 'no-store' });
+                if (!res.ok) throw new Error("HTTP Err");
                 const d = await res.json();
-                if (d.activations) updateHeatmap(d.activations, d.flash || [], d.rep_count || 0);
+                
+                if (d.activations) {
+                    const currentStr = JSON.stringify(d.activations);
+                    // 肌电值本质极度狂乱，如果 150 毫秒一点都没抖动（包括底噪），说明底层进程死了或连断了
+                    if (currentStr !== lastEmgStr) {
+                        lastEmgStr = currentStr;
+                        lastEmgAliveTs = Date.now();
+                        document.getElementById('sensorAlertToast').classList.remove('show');
+                    }
+                    
+                    updateHeatmap(d.activations, d.flash || [], d.rep_count || 0);
+                }
+                
                 const warnEl = document.getElementById('compensationWarnings');
                 if (d.warnings && d.warnings.length > 0) {
                     warnEl.innerHTML = d.warnings.map(w => `<div class="compensation-warn">${w}</div>`).join('');
                 } else {
                     warnEl.innerHTML = '';
                 }
-            } catch(e) {}
-        }, 800);
+
+                // 哨兵：检测绝对死亡
+                if (Date.now() - lastEmgAliveTs > FATAL_TIMEOUT_MS) {
+                    document.getElementById('sensorAlertToast').classList.add('show');
+                }
+
+            } catch(e) {
+                // Fetch 挂掉也触发吐司提示
+                if (Date.now() - lastEmgAliveTs > FATAL_TIMEOUT_MS) {
+                    document.getElementById('sensorAlertToast').classList.add('show');
+                }
+            }
+        }, 30); // 30ms 轮询 (~33Hz)，打造行云流水的动画表现
 
         // ===== V2: Submit Profile =====
         async function submitProfile() {
@@ -854,6 +1065,47 @@
                 document.getElementById('configModal').classList.remove('show');
             } catch(e) { alert('提交失败: ' + e); }
         }
+
+        // ===== V4: Kinematics 2.5D CSS Matrix & Optical Glow =====
+        const KinematicsRig = {
+            updateSquatPose: function(angle, isCheating, fatigue) {
+                if (typeof angle !== 'number' || angle <= 0) return;
+                
+                // 180°站立, 70°极限深蹲
+                let bend = Math.max(0, 180 - angle); 
+                let squatRatio = Math.min(1, bend / 110); 
+                
+                // 硬件级半侧透视运动学推导
+                let torsoY = squatRatio * 90;            // 重力折叠：躯干剧烈下沉
+                let torsoRot = squatRatio * 35;          // 重心转移：躯干自然前倾
+                let thighRot = -(squatRatio * 110);      // 机械连杆：股骨反向扭转
+                let calfRot = +(squatRatio * 110);       // 机械连杆：胫骨回正平行
+                
+                const body = document.getElementById('rig-body');
+                const thigh = document.getElementById('rig-thigh');
+                const calf = document.getElementById('rig-calf');
+                
+                if (body) if(body) body.style.transform = `translateX(-50%) translateY(${torsoY}px) rotateZ(${torsoRot}deg)`;
+                if (thigh) if(thigh) thigh.style.transform = `rotateZ(${thighRot}deg)`;
+                if (calf) if(calf) calf.style.transform = `rotateZ(${calfRot}deg)`;
+
+                // 物理光学惩罚特效
+                const glow = document.getElementById('rig-glow');
+                if (glow) {
+                    if (isCheating) {
+                        // 红色激光惩罚（优先处理借力违规）
+                        if(glow) glow.style.boxShadow = '0 0 60px 30px rgba(239,68,68,0.85)';
+                    } else if (squatRatio > 0.6) {
+                        // 积累疲劳的绿色等离子充血泛光
+                        const intensity = Math.min(1, (fatigue / 1500) + 0.3);
+                        if(glow) glow.style.boxShadow = `0 0 50px 20px rgba(52,211,153,${intensity})`;
+                    } else {
+                        // 站立待机微光底噪
+                        if(glow) glow.style.boxShadow = '0 0 20px 5px rgba(52,211,153,0.1)';
+                    }
+                }
+            }
+        };
     </script>
 </body>
 </html>

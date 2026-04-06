@@ -6,8 +6,6 @@ import os
 import json
 import time
 import io
-import numpy as np
-import cv2
 from flask import Flask, Response, request
 
 template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'templates'))
@@ -52,17 +50,6 @@ def snapshot():
         with open("/dev/shm/result.jpg", "rb") as f:
             raw = f.read()
 
-        # cv2 重编码：仅降低 JPEG 质量（不缩放，保持文字和骨骼线清晰）
-        try:
-            arr = np.frombuffer(raw, np.uint8)
-            frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if frame is not None:
-                ok, enc = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, SNAPSHOT_QUALITY])
-                if ok:
-                    raw = enc.tobytes()
-        except Exception:
-            pass  # 压缩失败则发送原始帧
-
         _snapshot_last_mtime = st.st_mtime_ns
         _snapshot_cache = raw
 
@@ -87,17 +74,7 @@ def video_feed():
                     last_mtime = st.st_mtime_ns
                     with open("/dev/shm/result.jpg", "rb") as f:
                         raw = f.read()
-                    # cv2 重压缩（复用 snapshot 的质量参数）
-                    try:
-                        arr = np.frombuffer(raw, np.uint8)
-                        frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                        if frame is not None:
-                            ok, enc = cv2.imencode('.jpg', frame,
-                                [cv2.IMWRITE_JPEG_QUALITY, SNAPSHOT_QUALITY])
-                            if ok:
-                                raw = enc.tobytes()
-                    except Exception:
-                        pass
+                    
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + raw + b'\r\n')
             except FileNotFoundError:
@@ -197,6 +174,16 @@ def get_chat_input():
     except Exception:
         pass
     return Response('{"text":"","ts":0}', mimetype='application/json')
+
+@app.route('/api/voice_debug')
+def get_voice_debug():
+    try:
+        if os.path.exists("/dev/shm/voice_debug.json"):
+            with open("/dev/shm/voice_debug.json", "r", encoding="utf-8") as f:
+                return Response(f.read(), mimetype='application/json')
+    except Exception:
+        pass
+    return Response('{"energy":0, "threshold":150, "text":""}', mimetype='application/json')
 
 @app.route('/api/chat_draft')
 def chat_draft():

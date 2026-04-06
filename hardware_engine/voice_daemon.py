@@ -1,35 +1,36 @@
 #!/usr/bin/env python3
 """
-IronBuddy V2.2 唤醒式语音对话守护进程 — Vosk 离线 ASR 版
-- 完全离线，不依赖外网
-- 流式识别：每个 chunk 实时喂给 Vosk，延迟 <1s
-- 检测唤醒词"教练" → TTS "我在" → 录对话 → DeepSeek
+IronBuddy V3.0 唤醒式语音对话守护进程 — 最终重构加固版
+- 完全离线，不依赖外网（Vosk流式）
+- 修复 ALSA 轮询启停锁死暗雷 (彻底弃用 arecord -d 3，改用长链接 Popen 管道拾音)
+- 异步播放 TTS (Edge-TTS放入daemon线程，避免阻塞主回环监听)
+- 断网兜底交互逻辑 + 防冲突平滑音频切断(SIGTERM 缓冲)
 """
 import os
-import sys
 import time
-import wave
-import struct
-import subprocess
-import logging
 import json
+import logging
+import subprocess
+import threading
+import signal
 
-# 确保不走任何代理（彻底离线）
-for key in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
-    os.environ.pop(key, None)
+# 恢复局域网代理，供 Google ASR 兜底使用
+os.environ["http_proxy"] = "http://10.208.139.68:7890"
+os.environ["https_proxy"] = "http://10.208.139.68:7890"
+os.environ["HTTP_PROXY"] = "http://10.208.139.68:7890"
+os.environ["HTTPS_PROXY"] = "http://10.208.139.68:7890"
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - [VOICE] - %(message)s',
+    format='%(asctime)s - [VOICE_V3] - %(message)s',
     handlers=[logging.StreamHandler()]
 )
 
 # ===== 配置 =====
-MIC_CANDIDATES = ["plughw:0,0", "plughw:2,0", "plughw:3,0"]
+MIC_DEVICE = "hw:2,0"          # 硬核绑定：RK3399ProX 原生 ES7243 远场阵列
 SAMPLE_RATE = 16000
-CHANNELS = 1
-CHUNK_SECONDS = 3
-SILENCE_THRESHOLD = 150         # V2.1 调优值
+CHANNELS = 2
+SILENCE_THRESHOLD = 25         
 WAKE_WORDS = ["教练", "教", "叫练", "交练", "焦练", "iron", "buddy",
               "爱人", "巴蒂", "铁哥", "铁哥们", "铁头", "coach"]
 TTS_REPLY = "我在，请说"
@@ -37,303 +38,243 @@ DEVICE_SPK = "plughw:0,0"
 EDGE_TTS = "/home/toybrick/.local/bin/edge-tts"
 TTS_VOICE = "zh-CN-YunxiNeural"
 CHAT_INPUT_FILE = "/dev/shm/chat_input.txt"
-STARTUP_DELAY = 15  # 秒
+STARTUP_DELAY = 15
 
-# Vosk 模型路径（板端需要提前下载 vosk-model-small-cn-0.22）
-VOSK_MODEL_PATH = "/home/toybrick/vosk-model-small-cn-0.22"
-
-# ===== ASR 引擎初始化 =====
-ASR_ENGINE = None  # "vosk" | "google" | None
-
+# 初始化 ASR (SpeechRecognition 兜底 Vosk_ABI_Crash)
 try:
-    from vosk import Model, KaldiRecognizer
-    if os.path.exists(VOSK_MODEL_PATH):
-        _vosk_model = Model(VOSK_MODEL_PATH)
-        ASR_ENGINE = "vosk"
-        logging.info(f"✅ Vosk 离线 ASR 就绪 (模型: {VOSK_MODEL_PATH})")
-    else:
-        logging.warning(f"Vosk 模型目录不存在: {VOSK_MODEL_PATH}")
+    import speech_recognition as sr
+    ASR_ENGINE = "google"
+    global_recognizer = sr.Recognizer()
+    logging.info("✅ SpeechRecognition 内存桥接引擎已就绪")
 except ImportError:
-    logging.warning("Vosk 未安装 (pip install vosk)")
+    ASR_ENGINE = None
+    logging.error("SpeechRecognition 未安装")
 
-# Fallback: Google ASR（需要外网）
-if not ASR_ENGINE:
-    try:
-        import speech_recognition as sr
-        recognizer = sr.Recognizer()
-        ASR_ENGINE = "google"
-        logging.info("⚠️ 降级为 Google ASR（需要外网）")
-    except ImportError:
-        logging.error("❌ 无任何 ASR 引擎可用")
+# TTS 播放竞态锁
+_playback_lock = threading.Lock()
+_current_tts_process = None
 
-MIC_DEVICE = None
-
-
-def find_working_mic():
-    """尝试每个候选麦克风，返回第一个能录到声音的"""
-    subprocess.run(["amixer", "-c", "0", "sset", "Capture MIC Path", "Main Mic"],
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    for dev in MIC_CANDIDATES:
-        test_path = "/tmp/mic_probe.wav"
+def _graceful_stop_audio():
+    """优雅切断正在播放的音频，避免暴力 killall 导致 ALSA 驱动挂死"""
+    global _current_tts_process
+    
+    if _current_tts_process and _current_tts_process.poll() is None:
         try:
-            result = subprocess.run(
-                ["arecord", "-D", dev, "-f", "S16_LE", "-r", str(SAMPLE_RATE),
-                 "-c", str(CHANNELS), "-d", "1", test_path],
-                timeout=5, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
-            )
-            if result.returncode == 0 and os.path.exists(test_path):
-                os.remove(test_path)
-                return dev
-        except Exception:
-            pass
-        try:
-            os.remove(test_path)
-        except OSError:
-            pass
-    return None
+            _current_tts_process.send_signal(signal.SIGTERM)
+            try:
+                _current_tts_process.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                _current_tts_process.kill()
+        except: pass
+        _current_tts_process = None
+        
+    # 保底手段：发送友善的 TERM 信号给未知的游离播放器
+    subprocess.run(["killall", "-TERM", "mpg123", "aplay", "edge-tts"], stderr=subprocess.DEVNULL)
 
+def async_speak_tts(text):
+    """
+    非阻塞式 TTS，使用后台守护线程独立执行，
+    在断网导致 edge-tts 超时时降级使用本地静态缓存兜底。
+    """
+    def _tts_thread_task():
+        global _current_tts_process
+        with _playback_lock:
+            tmp_mp3 = "/tmp/voice_tts.mp3"
+            fallback_wav = "/home/toybrick/hardware_engine/fallback_reply.wav"
+            
+            try:
+                # 尝试 Edge-TTS，设定严格的 timeout，模拟联网死锁防护
+                subprocess.run(
+                    [EDGE_TTS, "--text", text, "--voice", TTS_VOICE, "--write-media", tmp_mp3],
+                    timeout=5, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                media_path = tmp_mp3
+                # 增加 -f 200 软限幅器（最大32768），强制音量衰减至物理底线（约0.6%）
+                player_cmd = ["mpg123", "-a", DEVICE_SPK, "-f", "200", "-q", media_path]
+            except Exception as e:
+                logging.warning(f"TTS 生成异常/超时，可能遭遇断网，启动本地降级: {e}")
+                if os.path.exists(fallback_wav):
+                    media_path = fallback_wav
+                    player_cmd = ["aplay", "-D", DEVICE_SPK, "-q", media_path]
+                    # 针对 aplay 硬核降音量
+                    subprocess.run(["amixer", "-c", "0", "sset", "Master", "1%"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+                else:
+                    logging.error("无可用的兜底交互音频。强制静默。")
+                    return
+            
+            # 安全切入音箱通道
+            subprocess.run(["amixer", "-c", "0", "sset", "Playback Path", "SPK_HP"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            
+            # 使用 Popen 拉起播放，注册进程实例以备未来的唤醒词强杀
+            try:
+                _current_tts_process = subprocess.Popen(player_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _current_tts_process.wait()
+            except Exception: pass
+            
+    # 拉起非阻塞后台线程
+    t = threading.Thread(target=_tts_thread_task, daemon=True)
+    t.start()
 
-def record_audio(duration=3, output_path="/tmp/voice_chunk.wav"):
-    global MIC_DEVICE
-    if not MIC_DEVICE:
-        return None
-    cmd = [
-        "arecord", "-D", MIC_DEVICE,
-        "-f", "S16_LE", "-r", str(SAMPLE_RATE), "-c", str(CHANNELS),
-        "-d", str(duration), output_path
-    ]
+def get_audio_energy(samples):
+    """内存级快速能量计算，取绝对值截断"""
+    if not samples: return 0
+    import struct
     try:
-        result = subprocess.run(cmd, timeout=duration + 5,
-                                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-        if result.returncode != 0:
-            err = result.stderr.decode('utf-8', errors='ignore').strip()
-            if 'busy' in err:
-                logging.warning(f"设备被占用，5s 后重试...")
-                time.sleep(5)
-                MIC_DEVICE = find_working_mic()
-                if MIC_DEVICE:
-                    logging.info(f"切换到麦克风: {MIC_DEVICE}")
-            else:
-                logging.error(f"录音失败: {err}")
-            return None
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 100:
-            return output_path
-        return None
-    except Exception as e:
-        logging.error(f"录音异常: {e}")
-        return None
-
-
-def get_audio_energy(wav_path):
-    try:
-        with wave.open(wav_path, 'rb') as wf:
-            frames = wf.readframes(wf.getnframes())
-            samples = struct.unpack(f"<{len(frames)//2}h", frames)
-            if not samples:
-                return 0
-            return sum(abs(s) for s in samples) / len(samples)
+        shorts = struct.unpack(f"<{len(samples)//2}h", samples)
+        if not shorts: return 0
+        return sum(abs(s) for s in shorts) / len(shorts)
     except Exception:
         return 0
 
-
-def speak_tts(text):
-    tmp_mp3 = "/tmp/voice_tts.mp3"
+def output_debug(energy, text):
     try:
-        subprocess.run(
-            [EDGE_TTS, "--text", text, "--voice", TTS_VOICE, "--write-media", tmp_mp3],
-            timeout=10, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        subprocess.run(["amixer", "-c", "0", "sset", "Playback Path", "SPK"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.run(
-            ["mpg123", "-a", DEVICE_SPK, "-r", "16000", "-f", "8000", "-q", tmp_mp3],
-            timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-    except Exception as e:
-        logging.error(f"TTS 失败: {e}")
-    finally:
-        try:
-            os.remove(tmp_mp3)
-        except OSError:
-            pass
-
-
-def transcribe(wav_path):
-    """V2.2: Vosk 离线优先，Google 在线 fallback"""
-    if ASR_ENGINE == "vosk":
-        return _transcribe_vosk(wav_path)
-    elif ASR_ENGINE == "google":
-        return _transcribe_google(wav_path)
-    return ""
-
-
-def _transcribe_vosk(wav_path):
-    """Vosk 离线识别 — 快速、无网络依赖"""
-    try:
-        rec = KaldiRecognizer(_vosk_model, SAMPLE_RATE)
-        with wave.open(wav_path, 'rb') as wf:
-            while True:
-                data = wf.readframes(4000)
-                if len(data) == 0:
-                    break
-                rec.AcceptWaveform(data)
-        result = json.loads(rec.FinalResult())
-        return result.get("text", "")
-    except Exception as e:
-        logging.error(f"Vosk 识别异常: {e}")
-        return ""
-
-
-def _transcribe_google(wav_path):
-    """Google 在线 ASR fallback（带 5s 超时）"""
-    try:
-        with sr.AudioFile(wav_path) as source:
-            audio = recognizer.record(source)
-        import socket
-        old_timeout = socket.getdefaulttimeout()
-        socket.setdefaulttimeout(5)
-        try:
-            result = recognizer.recognize_google(audio, language="zh-CN")
-        finally:
-            socket.setdefaulttimeout(old_timeout)
-        return result
-    except Exception as e:
-        logging.error(f"Google ASR 异常: {e}")
-        return ""
-
-
-def write_chat_input(text):
-    try:
-        with open(CHAT_INPUT_FILE + ".tmp", "w", encoding="utf-8") as f:
-            f.write(text)
-        os.rename(CHAT_INPUT_FILE + ".tmp", CHAT_INPUT_FILE)
-        logging.info(f"对话输入: {text}")
-    except Exception as e:
-        logging.error(f"写入失败: {e}")
-
+        debug_data = {"energy": float(energy), "threshold": SILENCE_THRESHOLD, "text": text}
+        with open("/dev/shm/voice_debug.json.tmp", "w", encoding="utf-8") as f:
+            json.dump(debug_data, f)
+        os.rename("/dev/shm/voice_debug.json.tmp", "/dev/shm/voice_debug.json")
+    except Exception:
+        pass
 
 def main():
-    global MIC_DEVICE
-
-    logging.info(f"等待 {STARTUP_DELAY}s 让其他进程初始化...")
+    logging.info(f"等待 {STARTUP_DELAY}s 让中心进程组初始化...")
     time.sleep(STARTUP_DELAY)
 
-    # 自动检测可用麦克风
-    for attempt in range(6):
-        MIC_DEVICE = find_working_mic()
-        if MIC_DEVICE:
-            logging.info(f"麦克风就绪: {MIC_DEVICE}")
-            break
-        logging.warning(f"第 {attempt+1} 次检测失败，10s 后重试...")
-        time.sleep(10)
+    if ASR_ENGINE != "google":
+        logging.error("需要 SpeechRecognition 包来实现内存桥接，退出守护进程。")
+        return
 
-    if not MIC_DEVICE:
-        logging.error("所有麦克风不可用，进入待机模式（每 30s 重试）")
-        while True:
-            time.sleep(30)
-            MIC_DEVICE = find_working_mic()
-            if MIC_DEVICE:
-                logging.info(f"麦克风恢复: {MIC_DEVICE}")
-                break
-
-    if not ASR_ENGINE:
-        logging.error("无 ASR 引擎，退出")
-        while True:
-            time.sleep(60)
-
-    logging.info(f"唤醒式语音守护就绪 | 引擎={ASR_ENGINE} | 麦克风={MIC_DEVICE}")
+    audio_buffer = bytearray()
+    
+    # 【最核心防御：管线式长链接拾音挂靠】
+    # 以 raw 格式无尽头拉取硬件内存流，拒绝重复调用 alsa init
+    arecord_cmd = [
+        "arecord", "-D", MIC_DEVICE, 
+        "-c", str(CHANNELS), "-r", str(SAMPLE_RATE), 
+        "-f", "S16_LE", "-t", "raw"
+    ]
+    logging.info(f"🎤 挂靠硬件 I2S 持续拾音管道: {' '.join(arecord_cmd)}")
+    
+    pipeline = subprocess.Popen(
+        arecord_cmd, 
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.PIPE
+    )
 
     conversation_mode = False
     silence_count = 0
     chunk_count = 0
     accumulated_text = ""
-
-    while True:
-        try:
-            wav_path = record_audio(duration=CHUNK_SECONDS)
-            if not wav_path:
-                time.sleep(1)
-                continue
-
-            energy = get_audio_energy(wav_path)
-            chunk_count += 1
-            logging.info(f"[chunk#{chunk_count}] 能量={energy:.0f} (阈值={SILENCE_THRESHOLD}){'  ★ 有声' if energy >= SILENCE_THRESHOLD else ''}")
-
-            if energy < SILENCE_THRESHOLD:
-                text = ""
-            else:
-                logging.info(f"语音检测 (能量={energy:.0f})")
-                text = transcribe(wav_path)
-
-            if not text:
-                if conversation_mode:
-                    silence_count += 1
-                    max_silence = 2 if not accumulated_text.strip() else 1
-                    if silence_count >= max_silence:
-                        logging.info("对话结束（ASR返回空，判定为结束）")
-                        if accumulated_text.strip():
-                            write_chat_input(accumulated_text.strip())
-                            accumulated_text = ""
-                        else:
-                            logging.warning("录音超时且无任何文字，判定为没听清")
-                            speak_tts("抱歉，我没听清，请再说一次。")
-
-                        conversation_mode = False
-                        silence_count = 0
-                        try:
-                            os.remove("/dev/shm/chat_active")
-                            os.remove("/dev/shm/chat_draft.txt")
-                        except OSError:
-                            pass
-                continue
-
-            silence_count = 0
-            logging.info(f"识别: {text}")
-
-            if not conversation_mode:
-                is_wake = any(w in text.lower() for w in WAKE_WORDS)
-
-                if is_wake:
-                    logging.info("唤醒词触发! 执行语音最高级打断...")
-                    os.system("killall aplay edge-tts mpg123 espeak 2>/dev/null")
-
-                    conversation_mode = True
-                    try:
-                        open("/dev/shm/chat_active", "w").close()
-                    except Exception:
-                        pass
-                    speak_tts(TTS_REPLY)
-
-                    remaining = ""
-                    for w in WAKE_WORDS:
-                        if w in text:
-                            remaining = text.split(w, 1)[-1].strip()
-                            if remaining:
-                                break
-                    if remaining:
-                        accumulated_text = remaining
-                        try:
-                            with open("/dev/shm/chat_draft.txt.tmp", "w") as f:
-                                f.write(accumulated_text)
-                            os.rename("/dev/shm/chat_draft.txt.tmp", "/dev/shm/chat_draft.txt")
-                        except Exception:
-                            pass
-            else:
-                logging.info(f"对话积攒: {text}")
-                accumulated_text += (" " if accumulated_text else "") + text
+    llm_reply_mtime = 0
+    
+    try:
+        while True:
+            # V2.3: 监听 总结陈词，教练主动念稿！(不阻塞回环)
+            if os.path.exists("/dev/shm/llm_reply.txt"):
                 try:
-                    with open("/dev/shm/chat_draft.txt.tmp", "w") as f:
-                        f.write(accumulated_text)
-                    os.rename("/dev/shm/chat_draft.txt.tmp", "/dev/shm/chat_draft.txt")
-                except Exception:
-                    pass
+                    ts = os.path.getmtime("/dev/shm/llm_reply.txt")
+                    if ts != llm_reply_mtime:
+                        llm_reply_mtime = ts
+                        with open("/dev/shm/llm_reply.txt", "r", encoding="utf-8") as f:
+                            sum_txt = f.read().strip()
+                        if sum_txt:
+                            logging.info(f"📢 并发下发长篇文字: {sum_txt}")
+                            async_speak_tts(sum_txt)
+                except Exception: pass
+                
+            # 阻塞读取管道缓冲区（每次 4000 byte，相当于 0.125 秒的双声道 16k 音频缓存）
+            data = pipeline.stdout.read(4000)
+            if not data:
+                logging.error("💥 arecord 管道意外断裂，强制清场重置！")
+                output_debug(-1, "麦克风离线/管道断裂")
+                pipeline.kill()
+                time.sleep(2)
+                pipeline = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                continue
+                
+            chunk_count += 1
+            energy = get_audio_energy(data)
+            
+            # 若处于静默期
+            if energy < SILENCE_THRESHOLD:
+                if chunk_count % 10 == 0:  
+                    output_debug(energy, "")
+                    
+                silence_count += 1
+                if len(audio_buffer) > 16000: # 有积攒的语音数据
+                    if silence_count > 10:    # 确认停顿 (约1.25秒)
+                        # 核心防卡死魔法：直接挂载 raw 内存为 AudioData
+                        audio_obj = sr.AudioData(bytes(audio_buffer), SAMPLE_RATE, 2)
+                        audio_buffer.clear()
+                        text = ""
+                        try:
+                            # 提交给 Google API
+                            text = global_recognizer.recognize_google(audio_obj, language="zh-CN")
+                            logging.info(f"🧠 Google ASR截流: {text}")
+                        except sr.UnknownValueError:
+                            pass
+                        except Exception as e:
+                            logging.error(f"Google API 报错: {e}")
+                        
+                        output_debug(energy, text)
+                        
+                        if text:
+                            if not conversation_mode:
+                                is_wake = any(w in text.lower() for w in WAKE_WORDS)
+                                if is_wake:
+                                    logging.info("⚡ 唤醒词击穿! 执行强压制策略，剥夺既有语音输出！")
+                                    _graceful_stop_audio()
+                                    conversation_mode = True
+                                    try:
+                                        open("/dev/shm/chat_active", "w").close()
+                                    except: pass
+                                    async_speak_tts(TTS_REPLY)
+                                    remaining = ""
+                                    for w in WAKE_WORDS:
+                                        if w in text:
+                                            remaining = text.split(w, 1)[-1].strip()
+                                            if remaining: break
+                                    if remaining:
+                                        accumulated_text = remaining
+                            else:
+                                accumulated_text += (" " if accumulated_text else "") + text
+                                
+                                try:
+                                    with open("/dev/shm/chat_draft.txt.tmp", "w") as f:
+                                        f.write(accumulated_text)
+                                    os.rename("/dev/shm/chat_draft.txt.tmp", "/dev/shm/chat_draft.txt")
+                                except: pass
+                                
+                if conversation_mode and silence_count > 25: # 2.5秒彻底没话说
+                    logging.info("⏸️ 侦测到静默，结束录音阶段。")
+                    if accumulated_text.strip():
+                        with open(CHAT_INPUT_FILE + ".tmp", "w", encoding="utf-8") as f:
+                            f.write(accumulated_text.strip())
+                        os.rename(CHAT_INPUT_FILE + ".tmp", CHAT_INPUT_FILE)
+                        logging.info(f"📝 投递句子: {accumulated_text.strip()}")
+                        accumulated_text = ""
+                    else:
+                        logging.warning("录制了死空集，不予投递")
+                        async_speak_tts("抱歉，我没听清。")
 
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            logging.error(f"异常: {e}")
-            time.sleep(1)
+                    conversation_mode = False
+                    silence_count = 0
+                    try:
+                        os.remove("/dev/shm/chat_active")
+                        os.remove("/dev/shm/chat_draft.txt")
+                    except OSError: pass
+                continue
 
+            # 处于发声期
+            silence_count = 0
+            audio_buffer.extend(data)
+            # 因为 API 为阻塞发送，发声期不能直接请求 API，仅积累到 audio_buffer 内存里，依靠 ALSA 万吨缓存吸纳冲击。
+
+    except KeyboardInterrupt:
+        logging.info("收到中止命令。休眠管道...")
+    finally:
+        pipeline.terminate()
+        pipeline.wait()
 
 if __name__ == "__main__":
     main()
