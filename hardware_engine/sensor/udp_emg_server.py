@@ -126,10 +126,20 @@ def io_dumper_worker():
     """
     while True:
         now = time.time()
-        
-        pct = CURRENT_RMS_PCT if IS_CONNECTED else 0
-        warnings = [] if IS_CONNECTED else ["Sensor Disconnected (UDP Timeout)"]
-        
+
+        if not IS_CONNECTED:
+            # No real sensor data — don't overwrite simulated EMG from vision pipeline
+            # Remove heartbeat so vision knows to generate simulated data
+            try:
+                os.remove('/dev/shm/emg_heartbeat')
+            except OSError:
+                pass
+            time.sleep(0.5)
+            continue
+
+        pct = CURRENT_RMS_PCT
+        warnings = []
+
         # 将该通道数据强力扩散至全部四肢反馈，便于观察
         acts = {
             "quadriceps": pct,
@@ -138,17 +148,17 @@ def io_dumper_worker():
             "biceps": pct
         }
         out = {"activations": acts, "warnings": warnings, "exercise": "squat"}
-        
+
         try:
             with open('/dev/shm/muscle_activation.json.tmp', 'w') as f:
                 json.dump(out, f)
             os.rename('/dev/shm/muscle_activation.json.tmp', '/dev/shm/muscle_activation.json')
-            
+
             with open('/dev/shm/emg_heartbeat', 'w') as f:
                 f.write(str(now))
         except Exception:
             pass
-            
+
         # 精确下发压控：1000Hz 抽样为 33Hz
         time.sleep(0.03)
 

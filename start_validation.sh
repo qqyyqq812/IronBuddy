@@ -1,64 +1,82 @@
 #!/bin/bash
-# 一键启动推流验证环境 V3.0 (联动 WSL 宿主机与 RK3399ProX 靶机)
+# IronBuddy V3.0 one-click start
+set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET="toybrick@10.105.245.224"
-WIN_KEY="/mnt/c/temp/id_rsa"
-WSL_KEY="$HOME/.ssh/id_rsa_toybrick"
+BOARD_KEY="$HOME/.ssh/id_rsa_toybrick"
+CLOUD_KEY="$HOME/.ssh/id_cloud_autodl"
+CLOUD_SSH="root@connect.westd.seetacloud.com"
+CLOUD_PORT=14191
+# AutoDL direct HTTPS (no SSH tunnel needed!)
+CLOUD_RTMPOSE_URL="https://u953119-ba4a-9dcd6a47.westd.seetacloud.com:8443/infer"
 
-# 1. 自动修复跨系统带来的 SSH 私钥权限拒绝问题
-if [ ! -f "$WSL_KEY" ]; then
-    if [ -f "$WIN_KEY" ]; then
-        echo "[1/4] 从 Windows 挂载点抓取私钥并施加 600 权限..."
-        cp "$WIN_KEY" "$WSL_KEY"
-        chmod 600 "$WSL_KEY"
+# [1/3] Keys + cloud check
+echo "[1/3] setup..."
+if [ ! -f "$BOARD_KEY" ]; then
+    [ -f "/mnt/c/temp/id_rsa" ] && cp "/mnt/c/temp/id_rsa" "$BOARD_KEY" && chmod 600 "$BOARD_KEY" || { echo "ERROR: no key"; exit 1; }
+fi
+
+if [ -f "$CLOUD_KEY" ]; then
+    ALIVE=$(ssh -p $CLOUD_PORT -i "$CLOUD_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+        $CLOUD_SSH "curl -s http://localhost:6006/health 2>/dev/null" 2>/dev/null || echo "")
+    if echo "$ALIVE" | grep -q '"ready"'; then
+        echo "  -> cloud GPU online"
     else
-        echo "❌ 找不到 $WIN_KEY，请确保密钥存在！"
-        exit 1
+        echo "  -> starting cloud server..."
+        ssh -p $CLOUD_PORT -i "$CLOUD_KEY" -o StrictHostKeyChecking=no \
+            $CLOUD_SSH 'export PATH=/root/miniconda3/bin:$PATH && cd /root/ironbuddy_cloud && nohup python rtmpose_http_server.py > server.log 2>&1 &' 2>/dev/null || true
+        sleep 10
     fi
 fi
 
-echo "[2/4] 从 WSL2 将最新高潜 V3 代码推入板载神经中枢..."
-SRC_DIR="$HOME/projects/embedded-fullstack"
-# 精确投送代码，避开一切冗杂依赖与历史包袱，彻底清爽化
-rsync -avz -e "ssh -i $WSL_KEY -o StrictHostKeyChecking=no" \
-    --exclude='.git' --exclude='*.tar.gz' --exclude='*.rar' --exclude='docs/hardware_ref' --exclude='backups' \
-    "$SRC_DIR/" $TARGET:/home/toybrick/streamer_v3/ > /dev/null 2>&1
-echo "  -> 代码重载完毕"
+# [2/3] Deploy
+echo "[2/3] rsync..."
+rsync -az -e "ssh -i $BOARD_KEY -o StrictHostKeyChecking=no" \
+    --exclude='.git' --exclude='*.tar.gz' --exclude='*.rar' \
+    --exclude='docs/hardware_ref' --exclude='backups' --exclude='.agent_memory' \
+    "$SCRIPT_DIR/" $TARGET:/home/toybrick/streamer_v3/ > /dev/null 2>&1
 
-echo "[3/4] 连入板载大脑，摧毁所有僵尸进程，清洗内存盘毒瘤..."
-ssh -i "$WSL_KEY" -o "StrictHostKeyChecking=no" $TARGET << 'EOF'
-  echo "  -> 物理超度旧的底层内核与引擎进程..."
-  killall -9 main 2>/dev/null
-  killall -9 python3 2>/dev/null
-  sleep 1
+# [3/3] Start board (direct HTTPS, no SSH tunnel!)
+echo "[3/3] starting..."
+ssh -i "$BOARD_KEY" -o StrictHostKeyChecking=no $TARGET "bash -s -- '$CLOUD_RTMPOSE_URL'" <<'BOARD'
+CLOUD_URL=$1
+echo toybrick | sudo -S killall -9 python3 2>/dev/null
+pkill -f "ssh.*-L.*6006" 2>/dev/null
+sleep 1
+rm -f /tmp/ironbuddy_*.pid
+sudo rm -f /dev/shm/*.json /dev/shm/*.txt /dev/shm/result.jpg /dev/shm/emg_heartbeat 2>/dev/null
 
-  echo "  -> 清洗内存盘脏数据..."
-  sudo rm -f /dev/shm/*.json /dev/shm/*.txt /dev/shm/result.jpg /dev/shm/emg_heartbeat 2>/dev/null
+cd /home/toybrick/streamer_v3
+WSL_IP=$(echo $SSH_CLIENT | awk '{print $1}')
 
-  echo "  -> [V3 - 视觉系] 全核点亮 NPU C++ 推理管线..."
-  echo toybrick | sudo -S nohup /home/toybrick/yolo_test/build/main 2 /home/toybrick/yolo_test/data/weights/pose-5s6-640-uint8.rknn /dev/video5 0.5 > /tmp/npu_main.log 2>&1 &
-  # Wait for NPU init
-  sleep 2
+echo "  -> [1/5] vision (Cloud GPU direct HTTPS)"
+nohup env CLOUD_RTMPOSE_URL="$CLOUD_URL" python3 -u hardware_engine/ai_sensory/cloud_rtmpose_client.py > /tmp/npu_main.log 2>&1 &
+echo $! > /tmp/ironbuddy_vision.pid
+sleep 3
 
-  echo "  -> [V3 - 表现层] 启动毫秒级 Streamer 中继站..."
-  cd /home/toybrick/streamer_v3
-  nohup python3 streamer_app.py > /tmp/streamer.log 2>&1 &
+echo "  -> [2/5] streamer"
+nohup python3 streamer_app.py > /tmp/streamer.log 2>&1 &
+echo $! > /tmp/ironbuddy_streamer.pid
 
-  echo "  -> [V3 - 调度层] 拉起深蹲 FSM 状态机总控..."
-  nohup python3 hardware_engine/main_claw_loop.py > /tmp/main_loop.log 2>&1 &
+echo "  -> [3/5] FSM"
+nohup env OPENCLAW_URL="ws://${WSL_IP}:18789" python3 hardware_engine/main_claw_loop.py > /tmp/main_loop.log 2>&1 &
+echo $! > /tmp/ironbuddy_mainloop.pid
 
-  echo "  -> [V3 - 收信系] 部署唤醒式录音守护..."
-  nohup python3 hardware_engine/voice_daemon.py > /tmp/voice_daemon.log 2>&1 &
+echo "  -> [4/5] EMG"
+nohup python3 hardware_engine/sensor/udp_emg_server.py > /tmp/udp_emg.log 2>&1 &
+echo $! > /tmp/ironbuddy_emg.pid
 
-  echo "  -> [V3 - 肌电链] 启动射频中转器与全息假体..."
-  cd /home/toybrick/streamer_v3/hardware_engine/sensor
-  nohup python3 udp_emg_server.py > /tmp/udp_emg.log 2>&1 &
+echo "  -> [5/5] voice"
+nohup python3 hardware_engine/voice_daemon.py > /tmp/voice_daemon.log 2>&1 &
+echo $! > /tmp/ironbuddy_voice.pid
 
-  echo "  -> 板载深层架构全开！"
-EOF
+echo "  -> done"
+BOARD
 
-echo "[4/4] ==========================================================="
-echo "✅ IronBuddy V3.0 已全面重构上线运行！"
-echo "🌐 前端访问地址: http://10.105.245.224:5000/"
-echo "🎤 说出“教练”即可唤醒对话！"
-echo "================================================================="
+echo ""
+echo "==========================================================="
+echo "  IronBuddy V3.0 online!"
+echo "  Web:   http://10.105.245.224:5000/"
+echo "  Vision: Cloud GPU direct HTTPS (~100ms, no tunnel)"
+echo "==========================================================="

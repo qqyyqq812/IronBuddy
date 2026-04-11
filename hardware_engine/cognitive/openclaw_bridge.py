@@ -8,6 +8,9 @@ import websockets
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class OpenClawBridge:
+    MAX_RECONNECT_RETRIES = 5
+    RECONNECT_INTERVAL = 10  # seconds between reconnection attempts
+
     def __init__(self, gateway_url="ws://127.0.0.1:18789", token="67d0442e3a5e7aa3f4d5519cee1ac1a7d413b7062c7dc4c6"):
         self.gateway_url = gateway_url
         self.token = token
@@ -15,14 +18,18 @@ class OpenClawBridge:
         # 移除写死的 session_key = "agent:main:main"
         self._response_futures = {}
         self._connected_event = asyncio.Event()
+        self._reconnect_task = None
 
     async def connect(self):
         """建立 WebSocket 连接并响应鉴权挑战"""
         headers = {"Authorization": f"Bearer {self.token}"}
         try:
-            self.ws = await websockets.connect(self.gateway_url, extra_headers=headers)
+            self.ws = await asyncio.wait_for(
+                websockets.connect(self.gateway_url, extra_headers=headers),
+                timeout=10
+            )
             asyncio.create_task(self._listen_loop())
-            await self._connected_event.wait()
+            await asyncio.wait_for(self._connected_event.wait(), timeout=10)
             logging.info("🌟 OpenClaw Bridge 已连接且鉴权成功")
             return True
         except Exception as e:
@@ -138,6 +145,29 @@ class OpenClawBridge:
             logging.error(f"❌ 侦听线程崩溃: {e}")
         finally:
             self._connected_event.clear()
+            self.ws = None
+            # Schedule reconnection attempt in the background
+            if self._reconnect_task is None or self._reconnect_task.done():
+                self._reconnect_task = asyncio.create_task(self._reconnect_loop())
+
+    async def _reconnect_loop(self):
+        """Attempt to reconnect every RECONNECT_INTERVAL seconds, up to MAX_RECONNECT_RETRIES times."""
+        for attempt in range(1, self.MAX_RECONNECT_RETRIES + 1):
+            logging.info(f"🔄 [重连] 第 {attempt}/{self.MAX_RECONNECT_RETRIES} 次尝试重连 OpenClaw Gateway...")
+            await asyncio.sleep(self.RECONNECT_INTERVAL)
+            success = await self.connect()
+            if success:
+                logging.info("✅ [重连] OpenClaw Bridge 重连成功")
+                return
+        logging.error(f"❌ [重连] {self.MAX_RECONNECT_RETRIES} 次重连均失败，放弃。")
+
+    async def health_check(self):
+        """Return a dict with connection status, readable by the web dashboard."""
+        return {
+            "connected": self._connected_event.is_set(),
+            "gateway_url": self.gateway_url,
+            "pending_futures": len(self._response_futures)
+        }
 
     async def ask(self, text, timeout=60, generate_new_session=True):
         """高度封装的对外大模型询问 API (自带 Context 斩断)"""

@@ -49,3 +49,4 @@ docs/hardware_ref/
 *.log
 streamer.log
 *.tmp
+tools/rknn-toolkit_source

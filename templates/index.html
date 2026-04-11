@@ -218,12 +218,14 @@
         .chat-area::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
         .chat-bubble {
+            position: relative; overflow: hidden;
             background: var(--bg-glass);
             border: 1px solid var(--border);
             border-radius: 10px;
             padding: 10px 12px; margin-bottom: 8px;
             font-size: 0.85em; line-height: 1.6;
             animation: fadeIn 0.3s ease;
+            backdrop-filter: blur(8px);
         }
         .chat-bubble .time-tag {
             font-size: 0.68em; color: var(--text-secondary);
@@ -245,6 +247,18 @@
         }
         .chat-bubble.user-bubble .bubble-label {
             font-size: 0.7em; color: var(--accent-blue); font-weight: 600;
+        }
+        .chat-bubble.bot-bubble {
+            border-color: rgba(167, 139, 250, 0.4);
+            box-shadow: inset 0 0 10px rgba(167, 139, 250, 0.1);
+        }
+        .chat-bubble.bot-bubble::before {
+            content: ''; position: absolute; top: 0; left: -100%; width: 50%; height: 100%;
+            background: linear-gradient(to right, transparent, rgba(167, 139, 250, 0.2), transparent);
+            transform: skewX(-20deg); animation: scan 3s infinite; pointer-events: none;
+        }
+        @keyframes scan {
+            0% { left: -100%; } 100% { left: 200%; }
         }
         .chat-bubble.bot-bubble .bubble-label {
             font-size: 0.7em; color: var(--accent-purple); font-weight: 600;
@@ -454,6 +468,12 @@
             <span id="connText">系统在线</span>
         </div>
         <button class="btn btn-primary" style="padding: 5px 14px; width: auto; font-size: 0.75em;" onclick="document.getElementById('configModal').classList.add('show')">⚙️ 训练配置</button>
+        <div style="display:flex;gap:6px;align-items:center;">
+            <select id="quickExercise" onchange="switchExercise(this.value)" style="background:var(--bg-glass);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;padding:5px 10px;font-size:0.8em;cursor:pointer;">
+                <option value="squat">深蹲</option>
+                <option value="bicep_curl">哑铃弯举</option>
+            </select>
+        </div>
     </header>
 
     <main class="dashboard">
@@ -484,6 +504,21 @@
             <!-- Stats Card -->
             <div class="card">
                 <div class="card-title"><span class="icon">📊</span> 本组训练统计</div>
+                
+                <!-- Circular Score Bar -->
+                <div style="display: flex; justify-content: center; margin-bottom: 12px; position: relative;">
+                    <svg width="100" height="100" viewBox="0 0 100 100">
+                        <circle cx="50" cy="50" r="40" fill="none" stroke="var(--bg-glass)" stroke-width="10"></circle>
+                        <circle id="actionScoreCircle" cx="50" cy="50" r="40" fill="none" stroke="var(--accent-blue)" stroke-width="10" 
+                                stroke-dasharray="251.2" stroke-dashoffset="251.2" stroke-linecap="round" 
+                                style="transition: stroke-dashoffset 0.3s ease, stroke 0.3s ease; transform: rotate(-90deg); transform-origin: 50% 50%;"></circle>
+                    </svg>
+                    <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center;">
+                        <div id="actionScoreText" style="font-size: 1.5em; font-weight: 700; color: var(--accent-blue);">0%</div>
+                        <div style="font-size: 0.55em; color: var(--text-secondary); text-transform: uppercase;">动作幅度</div>
+                    </div>
+                </div>
+
                 <div class="stats-grid">
                     <div class="stat-item">
                         <div class="stat-label">标准深蹲</div>
@@ -516,8 +551,8 @@
                 </div>
 
                 <div style="display: flex; gap: 8px; margin-top: 14px;">
-                    <button class="btn btn-danger" onclick="resetSession()">🔄 重置统计</button>
-                    <button class="btn btn-primary" onclick="triggerDeepseek()" style="background: rgba(96, 165, 250, 0.1); border-color: var(--accent-blue);">📝 生成本组点评</button>
+                    <button id="btnReset" class="btn btn-danger" onclick="resetSession()">🔄 重置统计</button>
+                    <button id="btnSumm" class="btn btn-primary" onclick="triggerDeepseek()" style="background: rgba(96, 165, 250, 0.1); border-color: var(--accent-blue);">📝 生成本组点评</button>
                 </div>
             </div>
 
@@ -539,6 +574,13 @@
                 <div style="margin-top: 10px; padding: 6px; background: rgba(0,0,0,0.3); border-radius: 6px; font-family: monospace; font-size: 0.7em; color: var(--text-secondary);">
                     <div>🎤 Debug: <span id="micEnergy">检测中...</span> | 阈值: <span id="micThresh">0</span></div>
                     <div style="margin-top: 2px;">💬 L-ASR: <span id="micText"></span></div>
+                </div>
+                <!-- 文字聊天输入 -->
+                <div style="display:flex;gap:6px;margin-top:10px;">
+                    <input type="text" id="chatInput" placeholder="输入文字问教练..."
+                        style="flex:1;background:var(--bg-glass);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text-primary);font-size:0.85em;outline:none;"
+                        onkeydown="if(event.key==='Enter')sendChatText()">
+                    <button onclick="sendChatText()" style="background:var(--accent-blue);color:#fff;border:none;border-radius:8px;padding:8px 14px;cursor:pointer;font-size:0.85em;white-space:nowrap;">发送</button>
                 </div>
             </div>
 
@@ -567,6 +609,15 @@
                                 <div id="rig-calf" style="position:absolute; top: 76px; left: 2px; width:24px; height:100px; background:linear-gradient(180deg, #1d4ed8, #1e3a8a); border-radius:12px; transform-origin: 12px 12px; transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 0 15px rgba(29,78,216,0.5);">
                                     <!-- 脚底踏板 -->
                                     <div style="position:absolute; bottom:0; left:-10px; width:44px; height:8px; background:#e2e8f0; border-radius:4px; box-shadow:0 0 10px #e2e8f0;"></div>
+                                </div>
+                            </div>
+                            
+                            <!-- 新增: 手臂 (弯举) -->
+                            <div id="rig-upper-arm" style="position:absolute; top: 10px; left: 16px; width:22px; height:80px; background:linear-gradient(180deg, #ec4899, #be185d); border-radius:11px; transform-origin: 11px 11px; transition: opacity 0.5s, transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); opacity: 0; box-shadow: 0 0 15px rgba(236,72,153,0.5); z-index: 3;">
+                                <!-- 小臂 Forearm -->
+                                <div id="rig-forearm" style="position:absolute; top: 68px; left: 2px; width:18px; height:75px; background:linear-gradient(180deg, #be185d, #831843); border-radius:9px; transform-origin: 9px 9px; transition: transform 0.15s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 0 15px rgba(190,24,93,0.5);">
+                                    <!-- 哑铃 -->
+                                    <div style="position:absolute; bottom:-10px; left:-8px; width:34px; height:18px; background:#e2e8f0; border-radius:6px; box-shadow:0 0 10px #e2e8f0;"></div>
                                 </div>
                             </div>
                         </div>
@@ -622,10 +673,14 @@
         const STATE_MAP = {
             'NO_PERSON':  { text: '等待入镜', color: 'var(--text-secondary)' },
             'IDLE':       { text: '站立待命', color: 'var(--accent-blue)' },
+            'STAND':      { text: '锁定目标', color: 'var(--accent-blue)' },
             'DESCENDING': { text: '下蹲中 ⬇', color: 'var(--accent-amber)' },
             'ASCENDING':  { text: '起身中 ⬆', color: 'var(--accent-green)' },
             'BOTTOM':     { text: '触底 ✅', color: 'var(--accent-green)' },
-            'INVALID_ASCENT': { text: '⚠ 半蹲违规', color: 'var(--accent-red)' }
+            'INVALID_ASCENT': { text: '⚠ 半蹲违规', color: 'var(--accent-red)' },
+            'CURLING':    { text: '发力弯举 ⬆', color: 'var(--accent-amber)' },
+            'EXTENDING':  { text: '离心下放 ⬇', color: 'var(--accent-blue)' },
+            'TOP':        { text: '顶峰收缩 ✅', color: 'var(--accent-green)' }
         };
 
         // ===== FSM State Polling (Web Worker) =====
@@ -712,7 +767,31 @@
                 // 纯净剥离：完全不再参考 FSM 传来的 EMG 数值预测作弊
                 const isCheating = false; 
                 const currentFatigue = d.fatigue || 0;
-                KinematicsRig.updateSquatPose(d.angle, isCheating, currentFatigue);
+                
+                let actionPct = 0;
+                // Use NN similarity if available, otherwise compute from angle
+                if (d.similarity && d.similarity > 0) {
+                    actionPct = Math.round(d.similarity * 100);
+                } else if (d.exercise === 'bicep_curl') {
+                    actionPct = Math.max(0, Math.min(100, ((150 - d.angle) / 100) * 100));
+                } else {
+                    actionPct = Math.max(0, Math.min(100, ((180 - d.angle) / 70) * 100));
+                }
+                const circle = document.getElementById('actionScoreCircle');
+                const text = document.getElementById('actionScoreText');
+                if (circle && text) {
+                    const offset = 251.2 - (251.2 * actionPct / 100);
+                    circle.style.strokeDashoffset = offset;
+                    text.textContent = Math.round(actionPct) + '%';
+                    
+                    let col = 'var(--accent-blue)';
+                    if (actionPct >= 100) col = 'var(--accent-green)';
+                    else if (actionPct > 60) col = 'var(--accent-amber)';
+                    circle.style.stroke = col;
+                    text.style.color = col;
+                }
+
+                KinematicsRig.updatePose(d.angle, d.exercise, isCheating, currentFatigue, d.good || 0, d.failed || 0);
 
                 const fatigueEl = document.getElementById('statFatigueValue');
                 const fatigueBar = document.getElementById('fatigueBar');
@@ -770,19 +849,57 @@
             }
         });
 
+        // ===== Text Chat + Exercise Switch =====
+        async function sendChatText() {
+            const inp = document.getElementById('chatInput');
+            const text = inp.value.trim();
+            if (!text) return;
+            inp.value = '';
+            // Add user bubble
+            const area = document.getElementById('chatArea');
+            const ph = document.getElementById('chatPlaceholder');
+            if (ph) ph.remove();
+            area.innerHTML += '<div class="chat-bubble user-bubble"><div class="bubble-label">你</div>' + text + '</div>';
+            area.scrollTop = area.scrollHeight;
+            try { await fetch('/api/chat', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}) }); } catch(e) {}
+        }
+
+        async function switchExercise(ex) {
+            try {
+                await fetch('/api/user_profile', {
+                    method: 'POST',
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({exercise: ex})
+                });
+                await fetch('/reset_session', { method: 'POST' });
+            } catch(e) {}
+        }
+
         // ===== Reset / Trigger =====
         async function resetSession() {
             if (!confirm('确认清零本组训练数据？')) return;
+            let btn = document.getElementById('btnReset');
+            btn.disabled = true; btn.innerHTML = "⏳ 清除中...";
             try {
                 await fetch('/reset_session', { method: 'POST' });
                 lastReply = '';
                 document.getElementById('chatArea').innerHTML =
                     '<div class="chat-placeholder">点击「生成本组点评」<br>获取教练反馈 💪</div>';
             } catch (e) {}
+            setTimeout(() => { btn.disabled = false; btn.innerHTML = "🔄 重置统计"; }, 1000);
         }
 
         async function triggerDeepseek() {
+            let btn = document.getElementById('btnSumm');
+            btn.disabled = true; btn.innerHTML = "🧠 教练思考中...";
+            btn.style.opacity = "0.6";
+            
+            // 骨架屏视觉
+            document.getElementById('chatArea').innerHTML =
+                '<div class="chat-placeholder" style="animation: pulse 1.5s infinite;">⏳ 等待传输分析报告...</div>';
+
             try { await fetch('/trigger_deepseek', { method: 'POST' }); } catch (e) {}
+            // 按钮会在收到回答后被解开（转移到下面的 feed 轮询中恢复）
         }
 
         // ===== Master Chat Feed (Replies + User Input + Drafts) =====
@@ -798,6 +915,15 @@
                 if (!res.ok) return;
                 const d = await res.json();
                 if (d.reply && d.reply.trim().length > 0 && d.reply !== lastReply) {
+                    // 解锁按键状态
+                    let btn = document.getElementById('btnSumm');
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = "📝 生成本组点评";
+                        btn.style.opacity = "1";
+                    }
+
+                    lastReply = d.reply;
                     lastReply = d.reply;
                     appendChatBubble('教练 (总结)', d.reply, 'bot');
                 }
@@ -1068,40 +1194,62 @@
 
         // ===== V4: Kinematics 2.5D CSS Matrix & Optical Glow =====
         const KinematicsRig = {
-            updateSquatPose: function(angle, isCheating, fatigue) {
+            _lastGood: 0,
+            _lastFailed: 0,
+            updatePose: function(angle, exerciseMode, isCheating, fatigue, goodCount, failedCount) {
                 if (typeof angle !== 'number' || angle <= 0) return;
-                
-                // 180°站立, 70°极限深蹲
-                let bend = Math.max(0, 180 - angle); 
-                let squatRatio = Math.min(1, bend / 110); 
-                
-                // 硬件级半侧透视运动学推导
-                let torsoY = squatRatio * 90;            // 重力折叠：躯干剧烈下沉
-                let torsoRot = squatRatio * 35;          // 重心转移：躯干自然前倾
-                let thighRot = -(squatRatio * 110);      // 机械连杆：股骨反向扭转
-                let calfRot = +(squatRatio * 110);       // 机械连杆：胫骨回正平行
-                
+
                 const body = document.getElementById('rig-body');
                 const thigh = document.getElementById('rig-thigh');
                 const calf = document.getElementById('rig-calf');
-                
-                if (body) if(body) body.style.transform = `translateX(-50%) translateY(${torsoY}px) rotateZ(${torsoRot}deg)`;
-                if (thigh) if(thigh) thigh.style.transform = `rotateZ(${thighRot}deg)`;
-                if (calf) if(calf) calf.style.transform = `rotateZ(${calfRot}deg)`;
-
-                // 物理光学惩罚特效
+                const upperArm = document.getElementById('rig-upper-arm');
+                const forearm = document.getElementById('rig-forearm');
                 const glow = document.getElementById('rig-glow');
-                if (glow) {
-                    if (isCheating) {
-                        // 红色激光惩罚（优先处理借力违规）
-                        if(glow) glow.style.boxShadow = '0 0 60px 30px rgba(239,68,68,0.85)';
-                    } else if (squatRatio > 0.6) {
-                        // 积累疲劳的绿色等离子充血泛光
-                        const intensity = Math.min(1, (fatigue / 1500) + 0.3);
-                        if(glow) glow.style.boxShadow = `0 0 50px 20px rgba(52,211,153,${intensity})`;
-                    } else {
-                        // 站立待机微光底噪
-                        if(glow) glow.style.boxShadow = '0 0 20px 5px rgba(52,211,153,0.1)';
+
+                // Fatigue color: blue(0%) -> orange(50%) -> red(100%)
+                const fp = Math.min(1, fatigue / 1500);
+                const fr = Math.round(59 + fp * 196);   // 59->255
+                const fg = Math.round(130 - fp * 100);   // 130->30
+                const fb = Math.round(246 - fp * 200);   // 246->46
+                const fatigueColor = `rgb(${fr},${fg},${fb})`;
+                const fatigueShadow = `0 0 ${15+fp*30}px rgba(${fr},${fg},${fb},${0.4+fp*0.4})`;
+
+                // Flash on rep count change
+                let flash = null;
+                if (goodCount > this._lastGood) { flash = 'good'; this._lastGood = goodCount; }
+                if (failedCount > this._lastFailed) { flash = 'bad'; this._lastFailed = failedCount; }
+
+                if (exerciseMode === 'bicep_curl') {
+                    if (thigh) thigh.style.opacity = '0.1';
+                    if (upperArm) { upperArm.style.opacity = '1'; upperArm.style.background = `linear-gradient(180deg, ${fatigueColor}, #831843)`; upperArm.style.boxShadow = fatigueShadow; }
+                    if (body) body.style.transform = `translateX(-50%) translateY(0px) rotateZ(0deg)`;
+
+                    let curlRatio = Math.min(1, Math.max(0, (150 - angle) / 100));
+                    if (upperArm) upperArm.style.transform = `rotateZ(-10deg)`;
+                    if (forearm) forearm.style.transform = `rotateZ(${-(curlRatio * 130)}deg)`;
+
+                    if (glow) {
+                        if (flash === 'good') { glow.style.boxShadow = '0 0 80px 40px rgba(52,211,153,1)'; setTimeout(() => { glow.style.boxShadow = fatigueShadow; }, 300); }
+                        else if (flash === 'bad') { glow.style.boxShadow = '0 0 80px 40px rgba(239,68,68,1)'; setTimeout(() => { glow.style.boxShadow = fatigueShadow; }, 300); }
+                        else if (curlRatio > 0.6) { glow.style.boxShadow = `0 0 50px 20px rgba(${fr},${fg},${fb},${0.3+fp*0.5})`; }
+                        else { glow.style.boxShadow = `0 0 15px 5px rgba(${fr},${fg},${fb},0.15)`; }
+                    }
+                } else {
+                    if (thigh) { thigh.style.opacity = '1'; thigh.style.background = `linear-gradient(180deg, ${fatigueColor}, #1d4ed8)`; thigh.style.boxShadow = fatigueShadow; }
+                    if (upperArm) upperArm.style.opacity = '0';
+
+                    let bend = Math.max(0, 180 - angle);
+                    let squatRatio = Math.min(1, bend / 110);
+
+                    if (body) body.style.transform = `translateX(-50%) translateY(${squatRatio*90}px) rotateZ(${squatRatio*35}deg)`;
+                    if (thigh) thigh.style.transform = `rotateZ(${-(squatRatio*110)}deg)`;
+                    if (calf) calf.style.transform = `rotateZ(${+(squatRatio*110)}deg)`;
+
+                    if (glow) {
+                        if (flash === 'good') { glow.style.boxShadow = '0 0 80px 40px rgba(52,211,153,1)'; setTimeout(() => { glow.style.boxShadow = fatigueShadow; }, 300); }
+                        else if (flash === 'bad') { glow.style.boxShadow = '0 0 80px 40px rgba(239,68,68,1)'; setTimeout(() => { glow.style.boxShadow = fatigueShadow; }, 300); }
+                        else if (squatRatio > 0.6) { glow.style.boxShadow = `0 0 50px 20px rgba(${fr},${fg},${fb},${0.3+fp*0.5})`; }
+                        else { glow.style.boxShadow = `0 0 15px 5px rgba(${fr},${fg},${fb},0.15)`; }
                     }
                 }
             }

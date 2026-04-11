@@ -11,5 +11,6 @@
 - **节点 2**：稳定向 `main_claw_loop.py` 喂入正确的识别文字 (验收标准：DeepSeek 大语言模型有响应)。
 
 ## 关键技术上下文
-> ⚠️ 你的核心战区在 `hardware_engine/voice_daemon.py`
+> [!WARNING]
+> 你的核心战区在 `hardware_engine/voice_daemon.py`
 我们系统当前的瓶颈是录音设备被硬件级阻塞（死锁），直接导致整个对话教练系统“失聪”。你必须绕过传统的 ALSA 线程堵塞，必要情况可以改写底层的 `arecord` 流管道来非阻塞地提取音频。一旦拿到音频，必须无感地传递给 `/dev/shm` 或者进程间通信信道，保障大模型代理获取真实指令。

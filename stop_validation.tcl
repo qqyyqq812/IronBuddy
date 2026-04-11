@@ -1,7 +1,9 @@
 #!/usr/bin/tclsh
-puts "\[TCL Wrapper\] 正在下令回收所有 V3.0 板端总控权限..."
-if {[catch {exec bash [file dirname [info script]]/stop_validation.sh >@ stdout 2>@ stderr} results]} {
-    puts "⚠️  回收时发生错误: $results"
+# IronBuddy V3.0 一键停止 (含SSH隧道清理)
+puts "\[IronBuddy\] 停止中..."
+set script_dir [file dirname [info script]]
+if {[catch {exec bash "$script_dir/stop_validation.sh" >@ stdout 2>@ stderr} err]} {
+    puts "  停止异常: $err"
 } else {
-    puts "🎯  \[成功\] 实验安全终止，资源已释放。"
+    puts "  已安全关闭。"
 }

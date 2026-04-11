@@ -13,12 +13,17 @@ import logging
 import subprocess
 import threading
 import signal
+import concurrent.futures
+import fcntl
 
-# 恢复局域网代理，供 Google ASR 兜底使用
-os.environ["http_proxy"] = "http://10.208.139.68:7890"
-os.environ["https_proxy"] = "http://10.208.139.68:7890"
-os.environ["HTTP_PROXY"] = "http://10.208.139.68:7890"
-os.environ["HTTPS_PROXY"] = "http://10.208.139.68:7890"
+# Proxy disabled — direct internet works, proxy 10.208.139.68 is DOWN
+# If proxy is needed later, uncomment and update the address
+# os.environ["http_proxy"] = "http://10.208.139.68:7890"
+# os.environ["https_proxy"] = "http://10.208.139.68:7890"
+# os.environ["HTTP_PROXY"] = "http://10.208.139.68:7890"
+# os.environ["HTTPS_PROXY"] = "http://10.208.139.68:7890"
+for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
+    os.environ.pop(k, None)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -27,9 +32,9 @@ logging.basicConfig(
 )
 
 # ===== 配置 =====
-MIC_DEVICE = "hw:2,0"          # 硬核绑定：RK3399ProX 原生 ES7243 远场阵列
+MIC_DEVICE = "hw:Webcam,0"     # 强绑定：无视启动顺序漂移的 USB 摄像头专属代号
 SAMPLE_RATE = 16000
-CHANNELS = 2
+CHANNELS = 1
 SILENCE_THRESHOLD = 25         
 WAKE_WORDS = ["教练", "教", "叫练", "交练", "焦练", "iron", "buddy",
               "爱人", "巴蒂", "铁哥", "铁哥们", "铁头", "coach"]
@@ -39,6 +44,7 @@ EDGE_TTS = "/home/toybrick/.local/bin/edge-tts"
 TTS_VOICE = "zh-CN-YunxiNeural"
 CHAT_INPUT_FILE = "/dev/shm/chat_input.txt"
 STARTUP_DELAY = 15
+SPEAKER_VOLUME = int(os.environ.get("IRONBUDDY_SPEAKER_VOLUME", "80"))  # 0-100, configurable
 
 # 初始化 ASR (SpeechRecognition 兜底 Vosk_ABI_Crash)
 try:
@@ -49,6 +55,17 @@ try:
 except ImportError:
     ASR_ENGINE = None
     logging.error("SpeechRecognition 未安装")
+
+def process_asr(audio_obj, energy):
+    try:
+        text = global_recognizer.recognize_google(audio_obj, language="zh-CN")
+        logging.info(f"🧠 Google ASR截流: {text}")
+        return text, energy
+    except sr.UnknownValueError:
+        return "", energy
+    except Exception as e:
+        logging.error(f"Google API 报错: {e}")
+        return "", energy
 
 # TTS 播放竞态锁
 _playback_lock = threading.Lock()
@@ -89,21 +106,21 @@ def async_speak_tts(text):
                     timeout=5, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 media_path = tmp_mp3
-                # 增加 -f 200 软限幅器（最大32768），强制音量衰减至物理底线（约0.6%）
-                player_cmd = ["mpg123", "-a", DEVICE_SPK, "-f", "200", "-q", media_path]
+                # 去除限幅阉割，满压输出，恢复物理扬声器应有的音浪
+                player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
             except Exception as e:
                 logging.warning(f"TTS 生成异常/超时，可能遭遇断网，启动本地降级: {e}")
                 if os.path.exists(fallback_wav):
                     media_path = fallback_wav
                     player_cmd = ["aplay", "-D", DEVICE_SPK, "-q", media_path]
-                    # 针对 aplay 硬核降音量
-                    subprocess.run(["amixer", "-c", "0", "sset", "Master", "1%"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
                 else:
                     logging.error("无可用的兜底交互音频。强制静默。")
                     return
             
-            # 安全切入音箱通道
+            # 安全切入音箱通道，并设置可配置的音量
             subprocess.run(["amixer", "-c", "0", "sset", "Playback Path", "SPK_HP"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(["amixer", "-c", "0", "sset", "Master", f"{SPEAKER_VOLUME}%"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             
             # 使用 Popen 拉起播放，注册进程实例以备未来的唤醒词强杀
@@ -136,6 +153,24 @@ def output_debug(energy, text):
     except Exception:
         pass
 
+_last_wake_time = 0
+
+def output_voice_status(listening, energy):
+    """Write voice status for the web dashboard to read."""
+    global _last_wake_time
+    try:
+        status_data = {
+            "listening": bool(listening),
+            "energy": float(energy),
+            "threshold": SILENCE_THRESHOLD,
+            "last_wake": _last_wake_time
+        }
+        with open("/dev/shm/voice_status.json.tmp", "w", encoding="utf-8") as f:
+            json.dump(status_data, f)
+        os.rename("/dev/shm/voice_status.json.tmp", "/dev/shm/voice_status.json")
+    except Exception:
+        pass
+
 def main():
     logging.info(f"等待 {STARTUP_DELAY}s 让中心进程组初始化...")
     time.sleep(STARTUP_DELAY)
@@ -161,6 +196,13 @@ def main():
         stderr=subprocess.PIPE
     )
 
+    flags = fcntl.fcntl(pipeline.stdout, fcntl.F_GETFL)
+    fcntl.fcntl(pipeline.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+    asr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    asr_futures = []
+    watchdog_count = 0
+
     conversation_mode = False
     silence_count = 0
     chunk_count = 0
@@ -182,93 +224,115 @@ def main():
                             async_speak_tts(sum_txt)
                 except Exception: pass
                 
-            # 阻塞读取管道缓冲区（每次 4000 byte，相当于 0.125 秒的双声道 16k 音频缓存）
-            data = pipeline.stdout.read(4000)
-            if not data:
-                logging.error("💥 arecord 管道意外断裂，强制清场重置！")
-                output_debug(-1, "麦克风离线/管道断裂")
-                pipeline.kill()
-                time.sleep(2)
-                pipeline = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # 非阻塞读取管道缓冲区
+            try:
+                data = pipeline.stdout.read(4000)
+                watchdog_count = 0
+            except BlockingIOError:
+                data = b""
+                watchdog_count += 1
+                time.sleep(0.01)
+                if watchdog_count > 300: # 超过3秒无数据，管道死锁
+                    logging.error("💥 arecord 管道意外断裂或超时死锁，强制清场重置！")
+                    output_debug(-1, "麦克风离线/管道断裂")
+                    pipeline.kill()
+                    time.sleep(2)
+                    pipeline = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    flags = fcntl.fcntl(pipeline.stdout, fcntl.F_GETFL)
+                    fcntl.fcntl(pipeline.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                    watchdog_count = 0
+                    continue
+            except Exception as e:
+                logging.error(f"读取异常: {e}")
+                time.sleep(0.1)
                 continue
                 
-            chunk_count += 1
-            energy = get_audio_energy(data)
-            
-            # 若处于静默期
-            if energy < SILENCE_THRESHOLD:
-                if chunk_count % 10 == 0:  
-                    output_debug(energy, "")
-                    
-                silence_count += 1
-                if len(audio_buffer) > 16000: # 有积攒的语音数据
-                    if silence_count > 10:    # 确认停顿 (约1.25秒)
-                        # 核心防卡死魔法：直接挂载 raw 内存为 AudioData
-                        audio_obj = sr.AudioData(bytes(audio_buffer), SAMPLE_RATE, 2)
-                        audio_buffer.clear()
-                        text = ""
-                        try:
-                            # 提交给 Google API
-                            text = global_recognizer.recognize_google(audio_obj, language="zh-CN")
-                            logging.info(f"🧠 Google ASR截流: {text}")
-                        except sr.UnknownValueError:
-                            pass
-                        except Exception as e:
-                            logging.error(f"Google API 报错: {e}")
-                        
-                        output_debug(energy, text)
-                        
-                        if text:
-                            if not conversation_mode:
-                                is_wake = any(w in text.lower() for w in WAKE_WORDS)
-                                if is_wake:
-                                    logging.info("⚡ 唤醒词击穿! 执行强压制策略，剥夺既有语音输出！")
-                                    _graceful_stop_audio()
-                                    conversation_mode = True
-                                    try:
-                                        open("/dev/shm/chat_active", "w").close()
-                                    except: pass
-                                    async_speak_tts(TTS_REPLY)
-                                    remaining = ""
-                                    for w in WAKE_WORDS:
-                                        if w in text:
-                                            remaining = text.split(w, 1)[-1].strip()
-                                            if remaining: break
-                                    if remaining:
-                                        accumulated_text = remaining
-                            else:
-                                accumulated_text += (" " if accumulated_text else "") + text
-                                
-                                try:
-                                    with open("/dev/shm/chat_draft.txt.tmp", "w") as f:
-                                        f.write(accumulated_text)
-                                    os.rename("/dev/shm/chat_draft.txt.tmp", "/dev/shm/chat_draft.txt")
-                                except: pass
-                                
-                if conversation_mode and silence_count > 25: # 2.5秒彻底没话说
-                    logging.info("⏸️ 侦测到静默，结束录音阶段。")
-                    if accumulated_text.strip():
-                        with open(CHAT_INPUT_FILE + ".tmp", "w", encoding="utf-8") as f:
-                            f.write(accumulated_text.strip())
-                        os.rename(CHAT_INPUT_FILE + ".tmp", CHAT_INPUT_FILE)
-                        logging.info(f"📝 投递句子: {accumulated_text.strip()}")
-                        accumulated_text = ""
-                    else:
-                        logging.warning("录制了死空集，不予投递")
-                        async_speak_tts("抱歉，我没听清。")
-
-                    conversation_mode = False
-                    silence_count = 0
-                    try:
-                        os.remove("/dev/shm/chat_active")
-                        os.remove("/dev/shm/chat_draft.txt")
-                    except OSError: pass
+            if not data and pipeline.poll() is not None:
+                logging.error("💥 arecord 进程死亡，重启！")
+                time.sleep(2)
+                pipeline = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                flags = fcntl.fcntl(pipeline.stdout, fcntl.F_GETFL)
+                fcntl.fcntl(pipeline.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+                watchdog_count = 0
                 continue
+                
+            if data:
+                chunk_count += 1
+                energy = get_audio_energy(data)
+                
+                # 若处于静默期
+                if energy < SILENCE_THRESHOLD:
+                    if chunk_count % 10 == 0:
+                        output_debug(energy, "")
+                        output_voice_status(conversation_mode, energy)
+                        
+                    silence_count += 1
+                    if len(audio_buffer) > 16000: # 有积攒的语音数据
+                        if silence_count > 10:    # 确认停顿 (约1.25秒)
+                            audio_obj = sr.AudioData(bytes(audio_buffer), SAMPLE_RATE, 2)
+                            audio_buffer.clear()
+                            
+                            # 一键提交至后台异线程池，不阻塞管道读取！
+                            f = asr_executor.submit(process_asr, audio_obj, energy)
+                            asr_futures.append(f)
+                            
+                    if conversation_mode and silence_count > 25 and len(asr_futures) == 0: # 2.5秒彻底没话说，且队列排空
+                        logging.info("⏸️ 侦测到静默，结束录音阶段。")
+                        if accumulated_text.strip():
+                            with open(CHAT_INPUT_FILE + ".tmp", "w", encoding="utf-8") as f:
+                                f.write(accumulated_text.strip())
+                            os.rename(CHAT_INPUT_FILE + ".tmp", CHAT_INPUT_FILE)
+                            logging.info(f"📝 投递句子: {accumulated_text.strip()}")
+                            accumulated_text = ""
+                        else:
+                            logging.warning("录制了死空集，不予投递")
+                            async_speak_tts("抱歉，我没听清。")
 
-            # 处于发声期
-            silence_count = 0
-            audio_buffer.extend(data)
-            # 因为 API 为阻塞发送，发声期不能直接请求 API，仅积累到 audio_buffer 内存里，依靠 ALSA 万吨缓存吸纳冲击。
+                        conversation_mode = False
+                        silence_count = 0
+                        try:
+                            os.remove("/dev/shm/chat_active")
+                            os.remove("/dev/shm/chat_draft.txt")
+                        except OSError: pass
+                else:
+                    # 处于发声期
+                    silence_count = 0
+                    audio_buffer.extend(data)
+            
+            # 回收检查 ASR 结果 (非阻塞轮询)
+            done_futures = [f for f in asr_futures if f.done()]
+            for f in done_futures:
+                asr_futures.remove(f)
+                text, f_energy = f.result()
+                output_debug(f_energy, text)
+                
+                if text:
+                    if not conversation_mode:
+                        is_wake = any(w in text.lower() for w in WAKE_WORDS)
+                        if is_wake:
+                            logging.info("⚡ 唤醒词击穿! 执行强压制策略，剥夺既有语音输出！")
+                            _graceful_stop_audio()
+                            conversation_mode = True
+                            _last_wake_time = int(time.time())
+                            output_voice_status(True, f_energy)
+                            try:
+                                open("/dev/shm/chat_active", "w").close()
+                            except: pass
+                            async_speak_tts(TTS_REPLY)
+                            remaining = ""
+                            for w in WAKE_WORDS:
+                                if w in text:
+                                    remaining = text.split(w, 1)[-1].strip()
+                                    if remaining: break
+                            if remaining:
+                                accumulated_text = remaining
+                    else:
+                        accumulated_text += (" " if accumulated_text else "") + text
+                        try:
+                            with open("/dev/shm/chat_draft.txt.tmp", "w") as fdraft:
+                                fdraft.write(accumulated_text)
+                            os.rename("/dev/shm/chat_draft.txt.tmp", "/dev/shm/chat_draft.txt")
+                        except: pass
 
     except KeyboardInterrupt:
         logging.info("收到中止命令。休眠管道...")

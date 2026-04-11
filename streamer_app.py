@@ -74,15 +74,18 @@ def video_feed():
                     last_mtime = st.st_mtime_ns
                     with open("/dev/shm/result.jpg", "rb") as f:
                         raw = f.read()
-                    
+
                     yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + raw + b'\r\n')
+                           b'Content-Type: image/jpeg\r\n'
+                           b'Content-Length: ' + str(len(raw)).encode() + b'\r\n\r\n' + raw + b'\r\n')
             except FileNotFoundError:
                 pass
-            time.sleep(0.066)  # ~15fps cap
+            time.sleep(0.033)  # ~30fps cap
 
-    return Response(gen_frames(),
+    resp = Response(gen_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
 
 
 @app.route('/state_feed')
@@ -174,6 +177,23 @@ def get_chat_input():
     except Exception:
         pass
     return Response('{"text":"","ts":0}', mimetype='application/json')
+
+@app.route('/api/nn_inference')
+def nn_inference():
+    """Read neural network inference results"""
+    try:
+        if os.path.exists("/dev/shm/fsm_state.json"):
+            with open("/dev/shm/fsm_state.json", "r") as f:
+                data = json.load(f)
+            return Response(json.dumps({
+                "similarity": data.get("similarity", 0),
+                "classification": data.get("classification", "unknown"),
+                "nn_confidence": data.get("nn_confidence", 0)
+            }), mimetype='application/json')
+    except Exception:
+        pass
+    return Response('{"similarity":0,"classification":"unknown","nn_confidence":0}', mimetype='application/json')
+
 
 @app.route('/api/voice_debug')
 def get_voice_debug():
