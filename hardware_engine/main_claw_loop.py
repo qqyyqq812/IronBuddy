@@ -168,7 +168,7 @@ class SquatStateMachine:
                 return None
 
             obj = objects[0]
-            if obj.get("score", 0) < 0.35:
+            if obj.get("score", 0) < 0.15:
                 self.state = "NO_PERSON"
                 self.sync_to_frontend()
                 return None
@@ -336,7 +336,7 @@ class DumbbellCurlFSM:
                 return None
 
             obj = objects[0]
-            if obj.get("score", 0) < 0.35:
+            if obj.get("score", 0) < 0.15:
                 self.state = "NO_PERSON"
                 self.sync_to_frontend()
                 return None

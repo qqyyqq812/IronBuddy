@@ -80,7 +80,7 @@ def video_feed():
                            b'Content-Length: ' + str(len(raw)).encode() + b'\r\n\r\n' + raw + b'\r\n')
             except FileNotFoundError:
                 pass
-            time.sleep(0.033)  # ~30fps cap
+            time.sleep(0.067)  # ~15fps cap (was 30fps, halved for CPU saving)
 
     resp = Response(gen_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')

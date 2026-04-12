@@ -276,13 +276,13 @@ def main():
                 
             # 非阻塞读取管道缓冲区
             try:
-                data = pipeline.stdout.read(4000)
+                data = pipeline.stdout.read(8000)
                 watchdog_count = 0
             except BlockingIOError:
                 data = b""
                 watchdog_count += 1
-                time.sleep(0.01)
-                if watchdog_count > 300: # 超过3秒无数据，管道死锁
+                time.sleep(0.05)
+                if watchdog_count > 60: # 超过3秒无数据(60*0.05s)，管道死锁
                     logging.error("💥 arecord 管道意外断裂或超时死锁，强制清场重置！")
                     output_debug(-1, "麦克风离线/管道断裂")
                     pipeline.kill()

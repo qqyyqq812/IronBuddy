@@ -708,7 +708,7 @@
                         } catch(err) {
                             self.postMessage({ type: 'ERROR' });
                         }
-                    }, 100);
+                    }, 200);
                 } else if (e.data === 'FORCE') {
                     // 主线程切回前台时，强行抓取一次平滑过渡
                     (async () => {
@@ -1184,7 +1184,7 @@
                     document.getElementById('sensorAlertToast').classList.add('show');
                 }
             }
-        }, 30); // 30ms 轮询 (~33Hz)，打造行云流水的动画表现
+        }, 200); // 200ms 轮询 (~5Hz)，降低 CPU 占用
 
         // ===== V2: Submit Profile =====
         async function submitProfile() {

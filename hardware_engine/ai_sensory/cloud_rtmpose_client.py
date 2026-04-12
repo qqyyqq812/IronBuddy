@@ -60,8 +60,10 @@ CLOUD_HEALTH_URL = os.environ.get(
     "CLOUD_HEALTH_URL",
     CLOUD_INFER_URL.replace("/infer", "/health"),
 )
-JPEG_QUALITY = int(os.environ.get("CLOUD_JPEG_QUALITY", "70"))
+JPEG_QUALITY = int(os.environ.get("CLOUD_JPEG_QUALITY", "50"))
 REQUEST_TIMEOUT = float(os.environ.get("CLOUD_TIMEOUT_S", "5.0"))
+TARGET_FPS = int(os.environ.get("CLOUD_TARGET_FPS", "15"))
+FRAME_INTERVAL = 1.0 / TARGET_FPS
 USE_NPU_FALLBACK = os.environ.get("CLOUD_FALLBACK_NPU", "1") != "0"
 # Async mode: camera runs at full speed, cloud inference in background thread
 ASYNC_CLOUD = True
@@ -263,6 +265,9 @@ def main():
     print(f"[CloudClient] Camera device: {video_dev}")
     cap = cv2.VideoCapture(video_dev)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+    cap.set(cv2.CAP_PROP_FPS, TARGET_FPS)          # request lower FPS from driver
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)          # cap resolution
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     simulate_mode = not cap.isOpened()
     if simulate_mode:
         print("[CloudClient] Camera not found – running in simulation mode.")
@@ -316,9 +321,18 @@ def main():
     frame_idx = 0
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY]
 
+    _last_frame_time = 0.0
     try:
         while True:
             t_now = time.time()
+
+            # ── Frame rate limiter ────────────────────────────────────────────
+            elapsed = t_now - _last_frame_time
+            if elapsed < FRAME_INTERVAL:
+                time.sleep(FRAME_INTERVAL - elapsed)
+                t_now = time.time()
+            _last_frame_time = t_now
+
             frame_idx += 1
 
             # ── Grab frame ────────────────────────────────────────────────────
@@ -386,7 +400,7 @@ def main():
             out_json = {
                 "timestamp": t_now,
                 "frame_idx": frame_idx,
-                "objects": [{"score": round(person_score, 3), "kpts": smoothed_kpts}] if person_score > 0.15 else [],
+                "objects": [{"score": round(person_score, 3), "kpts": smoothed_kpts}] if person_score > 0.08 else [],
             }
             _write_pose_json(out_json)
 

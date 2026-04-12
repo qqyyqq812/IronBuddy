@@ -47,7 +47,7 @@ POLL_INTERVAL    = 1.0 / POLL_HZ
 
 # Validity thresholds
 MAX_TIMESTAMP_DIFF_S = 0.100  # 100 ms coherence window
-MIN_POSE_SCORE       = 0.35
+MIN_POSE_SCORE       = 0.10
 MIN_ANGLE_RANGE_DEG  = 20.0   # min angle excursion within the window
 WINDOW_SIZE_FOR_RANGE = 30    # look-back window for amplitude check
 
