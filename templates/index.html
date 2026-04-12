@@ -488,7 +488,7 @@
                     <div class="hud-state" id="hudState" style="color: var(--accent-blue);">等待中</div>
                 </div>
                 <div class="hud-card">
-                    <div class="hud-label">膝盖角度</div>
+                    <div class="hud-label" id="hudAngleLabel">膝盖角度</div>
                     <div class="hud-value" id="hudAngle" style="color: var(--text-primary);">—</div>
                 </div>
                 <div class="hud-card">
@@ -521,11 +521,11 @@
 
                 <div class="stats-grid">
                     <div class="stat-item">
-                        <div class="stat-label">标准深蹲</div>
+                        <div class="stat-label" id="statGoodLabel">标准深蹲</div>
                         <div class="stat-value green" id="statGood">0</div>
                     </div>
                     <div class="stat-item">
-                        <div class="stat-label">违规半蹲</div>
+                        <div class="stat-label" id="statFailedLabel">违规半蹲</div>
                         <div class="stat-value red" id="statFailed">0</div>
                     </div>
                     <div class="stat-item">
@@ -708,7 +708,7 @@
                         } catch(err) {
                             self.postMessage({ type: 'ERROR' });
                         }
-                    }, 500);
+                    }, 100);
                 } else if (e.data === 'FORCE') {
                     // 主线程切回前台时，强行抓取一次平滑过渡
                     (async () => {
@@ -739,6 +739,15 @@
                 const stateInfo = STATE_MAP[d.state] || STATE_MAP['NO_PERSON'];
                 document.getElementById('hudState').textContent = stateInfo.text;
                 document.getElementById('hudState').style.color = stateInfo.color;
+
+                // Dynamic labels based on exercise mode
+                const isCurl = d.exercise === 'bicep_curl';
+                document.getElementById('statGoodLabel').textContent = isCurl ? '标准弯举' : '标准深蹲';
+                document.getElementById('statFailedLabel').textContent = isCurl ? '违规弯举' : '违规半蹲';
+                document.getElementById('hudAngleLabel').textContent = isCurl ? '肘关节角度' : '膝盖角度';
+                // Sync quick-select dropdown
+                const qSel = document.getElementById('quickExercise');
+                if (qSel && qSel.value !== d.exercise) qSel.value = d.exercise;
 
                 document.getElementById('statGood').textContent = d.good;
                 document.getElementById('statFailed').textContent = d.failed;
@@ -1197,7 +1206,7 @@
             _lastGood: 0,
             _lastFailed: 0,
             updatePose: function(angle, exerciseMode, isCheating, fatigue, goodCount, failedCount) {
-                if (typeof angle !== 'number' || angle <= 0) return;
+                if (typeof angle !== 'number' || angle < 0) return;
 
                 const body = document.getElementById('rig-body');
                 const thigh = document.getElementById('rig-thigh');

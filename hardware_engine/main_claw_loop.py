@@ -416,6 +416,9 @@ async def _deepseek_fire_and_forget(bridge, prompt, good_count, failed_count):
                     await asyncio.sleep(3)
                     continue
 
+            # Strip <think>...</think> reasoning block (same as chat path)
+            if "</think>" in reply:
+                reply = reply.split("</think>")[-1].strip()
             logging.info(f"💡 [后台] DeepSeek 响应 ({elapsed:.2f}s): {reply}")
 
             try:

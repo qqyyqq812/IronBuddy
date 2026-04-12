@@ -42,9 +42,15 @@ TTS_REPLY = "我在，请说"
 DEVICE_SPK = "plughw:0,0"
 EDGE_TTS = "/home/toybrick/.local/bin/edge-tts"
 TTS_VOICE = "zh-CN-YunxiNeural"
+TTS_CACHE_DIR = os.path.expanduser("~/tts_cache")
+TTS_CACHE_MAP = {
+    "我在，请说": "wake_reply.mp3",
+    "抱歉，我没听清。": "not_heard.mp3",
+    "好的，收到。": "acknowledged.mp3",
+}
 CHAT_INPUT_FILE = "/dev/shm/chat_input.txt"
-STARTUP_DELAY = 15
-SPEAKER_VOLUME = int(os.environ.get("IRONBUDDY_SPEAKER_VOLUME", "80"))  # 0-100, configurable
+STARTUP_DELAY = 5
+SPEAKER_VOLUME = int(os.environ.get("IRONBUDDY_SPEAKER_VOLUME", "95"))  # 0-100, configurable
 
 # 初始化 ASR (SpeechRecognition 兜底 Vosk_ABI_Crash)
 try:
@@ -57,15 +63,25 @@ except ImportError:
     logging.error("SpeechRecognition 未安装")
 
 def process_asr(audio_obj, energy):
-    try:
-        text = global_recognizer.recognize_google(audio_obj, language="zh-CN")
-        logging.info(f"🧠 Google ASR截流: {text}")
-        return text, energy
-    except sr.UnknownValueError:
-        return "", energy
-    except Exception as e:
-        logging.error(f"Google API 报错: {e}")
-        return "", energy
+    """Google ASR with retry on network errors."""
+    for attempt in range(2):
+        try:
+            text = global_recognizer.recognize_google(audio_obj, language="zh-CN")
+            logging.info(f"🧠 Google ASR截流: {text}")
+            return text, energy
+        except sr.UnknownValueError:
+            return "", energy
+        except sr.RequestError as e:
+            logging.error(f"Google API 网络错误 (尝试 {attempt+1}/2): {e}")
+            if attempt == 0:
+                import time as _t; _t.sleep(0.5)
+                continue
+            logging.error("Google ASR 连续失败，请检查板端网络连接")
+            return "", energy
+        except Exception as e:
+            logging.error(f"Google API 报错: {e}")
+            return "", energy
+    return "", energy
 
 # TTS 播放竞态锁
 _playback_lock = threading.Lock()
@@ -97,24 +113,42 @@ def async_speak_tts(text):
         global _current_tts_process
         with _playback_lock:
             tmp_mp3 = "/tmp/voice_tts.mp3"
-            fallback_wav = "/home/toybrick/hardware_engine/fallback_reply.wav"
-            
-            try:
-                # 尝试 Edge-TTS，设定严格的 timeout，模拟联网死锁防护
-                subprocess.run(
-                    [EDGE_TTS, "--text", text, "--voice", TTS_VOICE, "--write-media", tmp_mp3],
-                    timeout=5, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
-                media_path = tmp_mp3
-                # 去除限幅阉割，满压输出，恢复物理扬声器应有的音浪
-                player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
-            except Exception as e:
-                logging.warning(f"TTS 生成异常/超时，可能遭遇断网，启动本地降级: {e}")
-                if os.path.exists(fallback_wav):
-                    media_path = fallback_wav
-                    player_cmd = ["aplay", "-D", DEVICE_SPK, "-q", media_path]
+            media_path = None
+            player_cmd = None
+
+            # 1. Check pre-cached TTS first (instant, no network)
+            cached_file = TTS_CACHE_MAP.get(text)
+            if cached_file:
+                cached_path = os.path.join(TTS_CACHE_DIR, cached_file)
+                if os.path.exists(cached_path) and os.path.getsize(cached_path) > 100:
+                    media_path = cached_path
+                    player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
+                    logging.info(f"🔊 使用缓存 TTS: {cached_file}")
+
+            # 2. Try edge-tts for dynamic text
+            if not media_path:
+                try:
+                    subprocess.run(
+                        [EDGE_TTS, "--text", text, "--voice", TTS_VOICE, "--write-media", tmp_mp3],
+                        timeout=8, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                    if os.path.getsize(tmp_mp3) > 100:
+                        media_path = tmp_mp3
+                        player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
+                    else:
+                        raise RuntimeError("edge-tts 输出为空")
+                except Exception as e:
+                    logging.warning(f"TTS 生成失败: {e}")
+
+            # 3. Fallback: use wake_reply as generic acknowledgement
+            if not media_path:
+                fallback = os.path.join(TTS_CACHE_DIR, "acknowledged.mp3")
+                if os.path.exists(fallback):
+                    media_path = fallback
+                    player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
+                    logging.warning("使用缓存兜底音频")
                 else:
-                    logging.error("无可用的兜底交互音频。强制静默。")
+                    logging.error("无可用音频，静默跳过")
                     return
             
             # 安全切入音箱通道，并设置可配置的音量
@@ -171,7 +205,23 @@ def output_voice_status(listening, energy):
     except Exception:
         pass
 
+def _boost_mic_gain():
+    """Maximize Webcam microphone capture gain via ALSA mixer."""
+    try:
+        result = subprocess.run(
+            ["amixer", "-c", "Webcam", "set", "Mic", "15"],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            logging.info("🔊 Webcam 麦克风增益已调至最大 (100%)")
+        else:
+            logging.warning(f"amixer 调整失败: {result.stderr.strip()}")
+    except Exception as e:
+        logging.warning(f"麦克风增益调整跳过: {e}")
+
+
 def main():
+    _boost_mic_gain()
     logging.info(f"等待 {STARTUP_DELAY}s 让中心进程组初始化...")
     time.sleep(STARTUP_DELAY)
 
@@ -298,6 +348,9 @@ def main():
                     # 处于发声期
                     silence_count = 0
                     audio_buffer.extend(data)
+                    if chunk_count % 5 == 0:
+                        output_debug(energy, "[录音中...]")
+                        output_voice_status(conversation_mode, energy)
             
             # 回收检查 ASR 结果 (非阻塞轮询)
             done_futures = [f for f in asr_futures if f.done()]

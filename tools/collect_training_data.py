@@ -116,10 +116,10 @@ def _symmetry_score(kpts: list) -> float:
     return 1.0 - abs(left_conf - right_conf) / total
 
 
-def _extract_angle_and_pose_score(pose_data: dict):
+def _extract_angle_and_pose_score(pose_data: dict, exercise: str = "squat"):
     """
-    Returns (angle_deg, pose_score) or (None, 0.0) if person not detected.
-    Mirrors the logic in SquatStateMachine.update().
+    Returns (angle_deg, pose_score, symmetry) or (None, 0.0) if person not detected.
+    Supports squat (knee angle) and bicep_curl (elbow angle).
     """
     objects = pose_data.get("objects", [])
     if not objects:
@@ -134,22 +134,33 @@ def _extract_angle_and_pose_score(pose_data: dict):
     if len(kpts) < 17:
         return None, score
 
-    l_score = kpts[11][2] + kpts[13][2] + kpts[15][2]
-    r_score = kpts[12][2] + kpts[14][2] + kpts[16][2]
-
-    if l_score > r_score:
-        hip, knee, ankle = kpts[11], kpts[13], kpts[15]
+    if exercise == "bicep_curl":
+        # Elbow angle: shoulder(5/6) - elbow(7/8) - wrist(9/10)
+        l_score = kpts[5][2] + kpts[7][2] + kpts[9][2]
+        r_score = kpts[6][2] + kpts[8][2] + kpts[10][2]
+        if l_score > r_score:
+            a, b, c = kpts[5], kpts[7], kpts[9]
+        else:
+            a, b, c = kpts[6], kpts[8], kpts[10]
     else:
-        hip, knee, ankle = kpts[12], kpts[14], kpts[16]
+        # Knee angle: hip(11/12) - knee(13/14) - ankle(15/16)
+        l_score = kpts[11][2] + kpts[13][2] + kpts[15][2]
+        r_score = kpts[12][2] + kpts[14][2] + kpts[16][2]
+        if l_score > r_score:
+            a, b, c = kpts[11], kpts[13], kpts[15]
+        else:
+            a, b, c = kpts[12], kpts[14], kpts[16]
 
-    angle = _angle_3pts(hip[:2], knee[:2], ankle[:2])
+    angle = _angle_3pts(a[:2], b[:2], c[:2])
     sym   = _symmetry_score(kpts)
     return angle, score, sym
 
 
-def _extract_emg(emg_data: dict):
-    """Returns (target_rms, comp_rms)."""
+def _extract_emg(emg_data: dict, exercise: str = "squat"):
+    """Returns (target_rms, comp_rms). Target muscle depends on exercise."""
     acts = emg_data.get("activations", {})
+    if exercise == "bicep_curl":
+        return acts.get("biceps", 0.0), acts.get("glutes", 0.0)
     return acts.get("glutes", 0.0), acts.get("biceps", 0.0)
 
 
@@ -173,13 +184,14 @@ def _amplitude_ok(angle_history: list) -> bool:
 # ---------------------------------------------------------------------------
 
 class DataCollector:
-    def __init__(self, mode: str, out_dir: str):
-        self.mode    = mode
-        self.out_dir = Path(out_dir)
+    def __init__(self, mode: str, out_dir: str, exercise: str = "squat"):
+        self.mode     = mode
+        self.exercise = exercise
+        self.out_dir  = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
         ts_str   = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.out_path = self.out_dir / f"train_squat_{mode}_{ts_str}.csv"
+        self.out_path = self.out_dir / f"train_{exercise}_{mode}_{ts_str}.csv"
 
         self.rows: list[list] = []
 
@@ -254,8 +266,9 @@ class DataCollector:
     # ------------------------------------------------------------------
     def run(self):
         print(f"\nIronBuddy Data Collector")
-        print(f"  Mode   : {self.mode}")
-        print(f"  Output : {self.out_path}")
+        print(f"  Exercise: {self.exercise}")
+        print(f"  Mode    : {self.mode}")
+        print(f"  Output  : {self.out_path}")
         print(f"\nControls:  [s] start/resume   [p] pause   [q] quit & save\n")
 
         self._clear_shm_mode()
@@ -299,7 +312,7 @@ class DataCollector:
                         continue
 
                     # Person detection & angle
-                    result = _extract_angle_and_pose_score(pose_data)
+                    result = _extract_angle_and_pose_score(pose_data, self.exercise)
                     if result[0] is None:
                         score = result[1]
                         validity_msg = f"SKIP: no_person (score={score:.2f})"
@@ -326,7 +339,7 @@ class DataCollector:
                         continue
 
                     # --- feature computation ---
-                    target_rms, comp_rms = _extract_emg(emg_data)
+                    target_rms, comp_rms = _extract_emg(emg_data, self.exercise)
 
                     ang_vel   = angle - self._prev_angle
                     ang_accel = ang_vel - self._prev_ang_vel
@@ -381,6 +394,85 @@ class DataCollector:
 
         print(f"[OK] Saved {len(self.rows)} frames to {self.out_path}")
 
+    # ------------------------------------------------------------------
+    def run_auto(self, duration_sec):
+        """Non-interactive auto-record mode. No TTY required."""
+        print(f"\nIronBuddy Data Collector (AUTO MODE)")
+        print(f"  Exercise : {self.exercise}")
+        print(f"  Mode     : {self.mode}")
+        print(f"  Duration : {duration_sec}s")
+        print(f"  Output   : {self.out_path}")
+
+        self._clear_shm_mode()
+        self.recording = True
+        self._set_shm_mode()
+
+        t_start = time.monotonic()
+        print(f"\n[AUTO] Recording started...")
+
+        try:
+            while time.monotonic() - t_start < duration_sec:
+                try:
+                    pose_data, emg_data, pose_ts, emg_ts = self._read_shm()
+                except RuntimeError:
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
+                if not _temporal_coherent(pose_ts, emg_ts):
+                    self.dropped += 1
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
+                result = _extract_angle_and_pose_score(pose_data, self.exercise)
+                if result[0] is None:
+                    self.dropped += 1
+                    time.sleep(POLL_INTERVAL)
+                    continue
+
+                angle, pose_score, sym = result
+                self._angle_history.append(angle)
+                if len(self._angle_history) > 120:
+                    self._angle_history.pop(0)
+
+                target_rms, comp_rms = _extract_emg(emg_data, self.exercise)
+
+                ang_vel   = angle - self._prev_angle
+                ang_accel = ang_vel - self._prev_ang_vel
+                self._prev_ang_vel = ang_vel
+                self._prev_angle   = angle
+
+                phase_prog = self._compute_phase_progress(angle)
+                now = time.time()
+
+                row = [
+                    f"{now:.3f}",
+                    f"{ang_vel:.4f}",
+                    f"{angle:.4f}",
+                    f"{ang_accel:.4f}",
+                    f"{target_rms:.4f}",
+                    f"{comp_rms:.4f}",
+                    f"{sym:.4f}",
+                    f"{phase_prog:.4f}",
+                    f"{pose_score:.4f}",
+                    self.mode,
+                ]
+                self.rows.append(row)
+                self.accepted += 1
+
+                elapsed = time.monotonic() - t_start
+                remaining = duration_sec - elapsed
+                print(
+                    f"\r[AUTO] {self.accepted} frames  dropped={self.dropped}  "
+                    f"remaining={remaining:.0f}s  angle={angle:.0f}°",
+                    end="", flush=True,
+                )
+                time.sleep(POLL_INTERVAL)
+        finally:
+            self._clear_shm_mode()
+
+        print(f"\n[AUTO] Recording finished.")
+        self._save()
+
 
 # ---------------------------------------------------------------------------
 # Entry point
@@ -398,14 +490,30 @@ def _parse_args() -> argparse.Namespace:
         help="Label for the collected data",
     )
     p.add_argument(
+        "--exercise",
+        choices=["squat", "bicep_curl"],
+        default="squat",
+        help="Exercise type (default: squat)",
+    )
+    p.add_argument(
         "--out",
         default=".",
         help="Output directory for the CSV file (default: current dir)",
+    )
+    p.add_argument(
+        "--auto",
+        type=int,
+        default=0,
+        metavar="SECONDS",
+        help="Auto-record for N seconds then save (no TTY needed)",
     )
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
-    collector = DataCollector(mode=args.mode, out_dir=args.out)
-    collector.run()
+    collector = DataCollector(mode=args.mode, out_dir=args.out, exercise=args.exercise)
+    if args.auto > 0:
+        collector.run_auto(args.auto)
+    else:
+        collector.run()
