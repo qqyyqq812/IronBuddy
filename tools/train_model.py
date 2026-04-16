@@ -350,7 +350,9 @@ def train(
             writer.add_figure("SimilarityDistribution", fig2, epochs)
             plt.close(fig2)
 
-            report = classification_report(all_labels, all_preds, target_names=CLASS_NAMES)
+            present_labels = sorted(set(all_labels))
+            present_names = [CLASS_NAMES[i] for i in present_labels]
+            report = classification_report(all_labels, all_preds, labels=present_labels, target_names=present_names)
             writer.add_text("ClassificationReport", f"```\n{report}\n```", epochs)
             print(f"\n{report}")
         except ImportError:

@@ -1,397 +1,561 @@
 #!/usr/bin/env python3
 """
-IronBuddy V3.0 唤醒式语音对话守护进程 — 最终重构加固版
-- 完全离线，不依赖外网（Vosk流式）
-- 修复 ALSA 轮询启停锁死暗雷 (彻底弃用 arecord -d 3，改用长链接 Popen 管道拾音)
-- 异步播放 TTS (Edge-TTS放入daemon线程，避免阻塞主回环监听)
-- 断网兜底交互逻辑 + 防冲突平滑音频切断(SIGTERM 缓冲)
+IronBuddy V4 语音守护进程 — 百度 AipSpeech 版
+- TTS: 百度在线语音合成 → WAV → aplay 播放
+- STT: arecord 录音 + 自适应VAD → 百度在线短语音识别
+- 唤醒: 录音→STT→关键词匹配 ("教练"等)
+- 参考: docs/hardware_ref/main2.py (已验证方案)
+- 抛弃: Vosk (ABI不兼容), edge-tts (依赖微软，不稳定), Google ASR
 """
 import os
+import sys
 import time
 import json
+import wave
 import logging
 import subprocess
 import threading
 import signal
-import concurrent.futures
-import fcntl
+import collections
+import struct
+import ctypes
 
-# Proxy disabled — direct internet works, proxy 10.208.139.68 is DOWN
-# If proxy is needed later, uncomment and update the address
-# os.environ["http_proxy"] = "http://10.208.139.68:7890"
-# os.environ["https_proxy"] = "http://10.208.139.68:7890"
-# os.environ["HTTP_PROXY"] = "http://10.208.139.68:7890"
-# os.environ["HTTPS_PROXY"] = "http://10.208.139.68:7890"
+# Proxy disabled
 for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
     os.environ.pop(k, None)
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - [VOICE_V3] - %(message)s',
+    format='%(asctime)s - [VOICE_V4] - %(message)s',
     handlers=[logging.StreamHandler()]
 )
 
+# ===== ALSA 错误静音 (参考 main2.py) =====
+try:
+    ERROR_HANDLER_FUNC = ctypes.CFUNCTYPE(
+        None, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p)
+    def _py_error_handler(filename, line, function, err, fmt):
+        pass
+    _c_error_handler = ERROR_HANDLER_FUNC(_py_error_handler)
+    _asound = ctypes.cdll.LoadLibrary('libasound.so.2')
+    _asound.snd_lib_error_set_handler(_c_error_handler)
+except Exception:
+    pass
+
 # ===== 配置 =====
-MIC_DEVICE = "hw:Webcam,0"     # 强绑定：无视启动顺序漂移的 USB 摄像头专属代号
-SAMPLE_RATE = 16000
-CHANNELS = 1
-SILENCE_THRESHOLD = 25         
-WAKE_WORDS = ["教练", "教", "叫练", "交练", "焦练", "iron", "buddy",
-              "爱人", "巴蒂", "铁哥", "铁哥们", "铁头", "coach"]
-TTS_REPLY = "我在，请说"
+BAIDU_APP_ID = os.environ.get("BAIDU_APP_ID", "")
+BAIDU_API_KEY = os.environ.get("BAIDU_API_KEY", "")
+BAIDU_SECRET_KEY = os.environ.get("BAIDU_SECRET_KEY", "")
+
+DEVICE_REC = "hw:2,0"  # es7243 阵列麦克风 (card 2)
 DEVICE_SPK = "plughw:0,0"
-EDGE_TTS = "/home/toybrick/.local/bin/edge-tts"
-TTS_VOICE = "zh-CN-YunxiNeural"
-TTS_CACHE_DIR = os.path.expanduser("~/tts_cache")
-TTS_CACHE_MAP = {
-    "我在，请说": "wake_reply.mp3",
-    "抱歉，我没听清。": "not_heard.mp3",
-    "好的，收到。": "acknowledged.mp3",
-}
+REC_RATE = 44100       # 录音采样率 (硬件原始)
+ASR_RATE = 16000       # 百度ASR要求16kHz
+SILENCE_LIMIT = 1.2    # 停顿多久算说完 (秒)
+VAD_TIMEOUT = 12       # 最长录音 (秒)
+WAKE_TIMEOUT = 6       # 唤醒监听超时 (秒)
+
+WAKE_WORDS = ["教练", "教", "叫练", "交练", "焦练", "铁哥", "coach"]
 CHAT_INPUT_FILE = "/dev/shm/chat_input.txt"
 STARTUP_DELAY = 5
-SPEAKER_VOLUME = int(os.environ.get("IRONBUDDY_SPEAKER_VOLUME", "95"))  # 0-100, configurable
 
-# 初始化 ASR (SpeechRecognition 兜底 Vosk_ABI_Crash)
-try:
-    import speech_recognition as sr
-    ASR_ENGINE = "google"
-    global_recognizer = sr.Recognizer()
-    logging.info("✅ SpeechRecognition 内存桥接引擎已就绪")
-except ImportError:
-    ASR_ENGINE = None
-    logging.error("SpeechRecognition 未安装")
+# 静音状态
+_is_muted = False
+_speech_lock = threading.Lock()
+_play_proc = None  # current aplay process
 
-def process_asr(audio_obj, energy):
-    """Google ASR with retry on network errors."""
-    for attempt in range(2):
-        try:
-            text = global_recognizer.recognize_google(audio_obj, language="zh-CN")
-            logging.info(f"🧠 Google ASR截流: {text}")
-            return text, energy
-        except sr.UnknownValueError:
-            return "", energy
-        except sr.RequestError as e:
-            logging.error(f"Google API 网络错误 (尝试 {attempt+1}/2): {e}")
-            if attempt == 0:
-                import time as _t; _t.sleep(0.5)
-                continue
-            logging.error("Google ASR 连续失败，请检查板端网络连接")
-            return "", energy
-        except Exception as e:
-            logging.error(f"Google API 报错: {e}")
-            return "", energy
-    return "", energy
+# 违规警报监听
+VIOLATION_ALERT_FILE = "/dev/shm/violation_alert.txt"
+_violation_mtime = 0
 
-# TTS 播放竞态锁
-_playback_lock = threading.Lock()
-_current_tts_process = None
 
-def _graceful_stop_audio():
-    """优雅切断正在播放的音频，避免暴力 killall 导致 ALSA 驱动挂死"""
-    global _current_tts_process
-    
-    if _current_tts_process and _current_tts_process.poll() is None:
-        try:
-            _current_tts_process.send_signal(signal.SIGTERM)
-            try:
-                _current_tts_process.wait(timeout=1.0)
-            except subprocess.TimeoutExpired:
-                _current_tts_process.kill()
-        except: pass
-        _current_tts_process = None
-        
-    # 保底手段：发送友善的 TERM 信号给未知的游离播放器
-    subprocess.run(["killall", "-TERM", "mpg123", "aplay", "edge-tts"], stderr=subprocess.DEVNULL)
-
-def async_speak_tts(text):
-    """
-    非阻塞式 TTS，使用后台守护线程独立执行，
-    在断网导致 edge-tts 超时时降级使用本地静态缓存兜底。
-    """
-    def _tts_thread_task():
-        global _current_tts_process
-        with _playback_lock:
-            tmp_mp3 = "/tmp/voice_tts.mp3"
-            media_path = None
-            player_cmd = None
-
-            # 1. Check pre-cached TTS first (instant, no network)
-            cached_file = TTS_CACHE_MAP.get(text)
-            if cached_file:
-                cached_path = os.path.join(TTS_CACHE_DIR, cached_file)
-                if os.path.exists(cached_path) and os.path.getsize(cached_path) > 100:
-                    media_path = cached_path
-                    player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
-                    logging.info(f"🔊 使用缓存 TTS: {cached_file}")
-
-            # 2. Try edge-tts for dynamic text
-            if not media_path:
-                try:
-                    subprocess.run(
-                        [EDGE_TTS, "--text", text, "--voice", TTS_VOICE, "--write-media", tmp_mp3],
-                        timeout=8, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                    if os.path.getsize(tmp_mp3) > 100:
-                        media_path = tmp_mp3
-                        player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
-                    else:
-                        raise RuntimeError("edge-tts 输出为空")
-                except Exception as e:
-                    logging.warning(f"TTS 生成失败: {e}")
-
-            # 3. Fallback: use wake_reply as generic acknowledgement
-            if not media_path:
-                fallback = os.path.join(TTS_CACHE_DIR, "acknowledged.mp3")
-                if os.path.exists(fallback):
-                    media_path = fallback
-                    player_cmd = ["mpg123", "-a", DEVICE_SPK, "-q", media_path]
-                    logging.warning("使用缓存兜底音频")
-                else:
-                    logging.error("无可用音频，静默跳过")
-                    return
-            
-            # 安全切入音箱通道，并设置可配置的音量
-            subprocess.run(["amixer", "-c", "0", "sset", "Playback Path", "SPK_HP"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run(["amixer", "-c", "0", "sset", "Master", f"{SPEAKER_VOLUME}%"],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
-            # 使用 Popen 拉起播放，注册进程实例以备未来的唤醒词强杀
-            try:
-                _current_tts_process = subprocess.Popen(player_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                _current_tts_process.wait()
-            except Exception: pass
-            
-    # 拉起非阻塞后台线程
-    t = threading.Thread(target=_tts_thread_task, daemon=True)
-    t.start()
-
-def get_audio_energy(samples):
-    """内存级快速能量计算，取绝对值截断"""
-    if not samples: return 0
-    import struct
+# ===== 百度 AipSpeech 初始化 =====
+def _init_baidu():
     try:
-        shorts = struct.unpack(f"<{len(samples)//2}h", samples)
-        if not shorts: return 0
-        return sum(abs(s) for s in shorts) / len(shorts)
-    except Exception:
-        return 0
+        from aip import AipSpeech
+        if not BAIDU_APP_ID or not BAIDU_API_KEY or not BAIDU_SECRET_KEY:
+            logging.error("百度语音 API 凭证未配置 (BAIDU_APP_ID/API_KEY/SECRET_KEY)")
+            return None
+        client = AipSpeech(BAIDU_APP_ID, BAIDU_API_KEY, BAIDU_SECRET_KEY)
+        logging.info("百度 AipSpeech 已就绪 (APP_ID: %s)", BAIDU_APP_ID)
+        return client
+    except ImportError:
+        logging.error("baidu-aip 未安装，请执行: pip3 install --user baidu-aip")
+        return None
 
+
+# ===== TTS: 百度合成 + aplay 播放 =====
+def text2sound(client, text, file_path="/tmp/voice_tts.wav"):
+    # type: (object, str, str) -> bool
+    with _speech_lock:
+        try:
+            result = client.synthesis(text, 'zh', 1, {'vol': 7, 'per': 4, 'aue': 6})
+            if not isinstance(result, dict):
+                with open(file_path, 'wb') as f:
+                    f.write(result)
+                return True
+            logging.error("TTS 合成失败: %s", result)
+            return False
+        except Exception as e:
+            logging.error("TTS 异常: %s", e)
+            return False
+
+
+def play_audio(file_path="/tmp/voice_tts.wav", allow_interrupt=True):
+    # type: (str, bool) -> None
+    global _play_proc
+    if not os.path.exists(file_path):
+        return
+
+    # 切断前一个播放
+    subprocess.run(["killall", "-9", "aplay"], stderr=subprocess.DEVNULL)
+    time.sleep(0.1)
+
+    # 设置音箱通道
+    subprocess.run(
+        ["sudo", "amixer", "-c", "0", "cset", "numid=1,iface=MIXER,name=Playback Path", "6"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    cmd = ["sudo", "aplay", "-D" + DEVICE_SPK, "-q", file_path]
+    _play_proc = subprocess.Popen(cmd)
+
+    while _play_proc.poll() is None:
+        if allow_interrupt and os.path.exists("/dev/shm/voice_interrupt"):
+            logging.info("语音播放被打断")
+            try:
+                _play_proc.terminate()
+                subprocess.run(["killall", "-9", "aplay"], stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+            try:
+                os.remove("/dev/shm/voice_interrupt")
+            except OSError:
+                pass
+            break
+        time.sleep(0.05)
+
+
+def speak(client, text, allow_interrupt=True):
+    # type: (object, str, bool) -> None
+    """TTS合成 + 播放 (一步到位)"""
+    if text2sound(client, text):
+        play_audio("/tmp/voice_tts.wav", allow_interrupt=allow_interrupt)
+
+
+# ===== STT: arecord + VAD + 百度识别 =====
+def record_with_vad(timeout=VAD_TIMEOUT):
+    # type: (int) -> str
+    """
+    录音，自适应VAD检测说话结束。
+    返回: "SUCCESS" (录到了), "SILENCE" (没人说话), "INTERRUPTED"
+    """
+    import audioop
+    import numpy as np
+
+    cmd = ["sudo", "arecord", "-D" + DEVICE_REC, "-r%d" % REC_RATE,
+           "-f", "S16_LE", "-c", "2", "-q"]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    started = False
+    silence_time = 0
+    audio_frames = []
+    pre_roll = collections.deque(maxlen=15)
+    start_time = time.time()
+
+    # 动态噪声基线校准 (8帧)
+    noise_samples = []
+    for _ in range(8):
+        data = proc.stdout.read(4096)
+        if data:
+            arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+            rms = float(np.sqrt(np.mean(np.square(arr))))
+            noise_samples.append(rms)
+
+    baseline = sum(noise_samples) / len(noise_samples) if noise_samples else 300
+    threshold = max(400, baseline + 250)
+    logging.info("VAD校准: baseline=%.0f threshold=%.0f (%d samples)", baseline, threshold, len(noise_samples))
+
+    output_path = "/tmp/voice_record.wav"
+
+    try:
+        while True:
+            if time.time() - start_time > timeout:
+                logging.info("录音超时 (%ds)", timeout)
+                break
+
+            data = proc.stdout.read(4096)
+            if not data:
+                break
+
+            arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+            rms = float(np.sqrt(np.mean(np.square(arr))))
+
+            if not started:
+                if rms > threshold:
+                    started = True
+                    audio_frames.extend(pre_roll)
+                    audio_frames.append(data)
+                else:
+                    pre_roll.append(data)
+            else:
+                audio_frames.append(data)
+                if rms >= threshold:
+                    silence_time = 0
+                else:
+                    silence_time += 4096.0 / (REC_RATE * 4)
+
+                if silence_time > SILENCE_LIMIT:
+                    logging.info("VAD: 停顿 %.1fs，录音结束", SILENCE_LIMIT)
+                    break
+    finally:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+        subprocess.run(["sudo", "killall", "arecord"], stderr=subprocess.DEVNULL)
+
+    if not started or not audio_frames:
+        logging.debug("VAD: 无人说话 (started=%s, frames=%d)", started, len(audio_frames))
+        return "SILENCE"
+
+    # 拼接 → 降采样到 16kHz mono → 保存 WAV
+    raw_bytes = b''.join(audio_frames)
+    mono = audioop.tomono(raw_bytes, 2, 0.5, 0.5)
+    resampled, _ = audioop.ratecv(mono, 2, 1, REC_RATE, ASR_RATE, None)
+
+    with wave.open(output_path, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(ASR_RATE)
+        wf.writeframes(resampled)
+
+    wav_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+    duration = len(resampled) / (ASR_RATE * 2)
+    logging.info("录音完成: %.1fs, %d bytes, %d帧", duration, wav_size, len(audio_frames))
+
+    if wav_size < 500:
+        logging.warning("录音文件太小 (%d bytes), 可能没录到声音", wav_size)
+        return "SILENCE"
+
+    return "SUCCESS"
+
+
+def sound2text(client, file_path="/tmp/voice_record.wav"):
+    # type: (object, str) -> str
+    """百度短语音识别"""
+    try:
+        wav_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+        logging.info("ASR 请求: %s (%d bytes)", file_path, wav_size)
+        with open(file_path, 'rb') as fp:
+            audio_data = fp.read()
+            result = client.asr(audio_data, 'wav', ASR_RATE, {'dev_pid': 1537})
+            logging.info("ASR 原始返回: err_no=%s, result=%s",
+                         result.get('err_no'), str(result.get('result', ''))[:100])
+            if result.get('err_no') == 0:
+                text = result['result'][0]
+                logging.info("ASR 识别: %s", text)
+                return text
+            else:
+                logging.warning("ASR 错误 (err_no=%s): %s", result.get('err_no'), result.get('err_msg', ''))
+    except Exception as e:
+        logging.error("ASR 异常: %s", e)
+    return ""
+
+
+# ===== Debug 输出 =====
 def output_debug(energy, text):
     try:
-        debug_data = {"energy": float(energy), "threshold": SILENCE_THRESHOLD, "text": text}
+        data = {"energy": float(energy), "threshold": 0, "text": text}
         with open("/dev/shm/voice_debug.json.tmp", "w", encoding="utf-8") as f:
-            json.dump(debug_data, f)
+            json.dump(data, f)
         os.rename("/dev/shm/voice_debug.json.tmp", "/dev/shm/voice_debug.json")
     except Exception:
         pass
 
-_last_wake_time = 0
 
-def output_voice_status(listening, energy):
-    """Write voice status for the web dashboard to read."""
-    global _last_wake_time
-    try:
-        status_data = {
-            "listening": bool(listening),
-            "energy": float(energy),
-            "threshold": SILENCE_THRESHOLD,
-            "last_wake": _last_wake_time
-        }
-        with open("/dev/shm/voice_status.json.tmp", "w", encoding="utf-8") as f:
-            json.dump(status_data, f)
-        os.rename("/dev/shm/voice_status.json.tmp", "/dev/shm/voice_status.json")
-    except Exception:
-        pass
-
-def _boost_mic_gain():
-    """Maximize Webcam microphone capture gain via ALSA mixer."""
-    try:
-        result = subprocess.run(
-            ["amixer", "-c", "Webcam", "set", "Mic", "15"],
-            capture_output=True, text=True, timeout=5
-        )
-        if result.returncode == 0:
-            logging.info("🔊 Webcam 麦克风增益已调至最大 (100%)")
-        else:
-            logging.warning(f"amixer 调整失败: {result.stderr.strip()}")
-    except Exception as e:
-        logging.warning(f"麦克风增益调整跳过: {e}")
-
-
+# ===== 主循环 =====
 def main():
-    _boost_mic_gain()
-    logging.info(f"等待 {STARTUP_DELAY}s 让中心进程组初始化...")
+    logging.info("等待 %ds 让其他服务初始化...", STARTUP_DELAY)
     time.sleep(STARTUP_DELAY)
 
-    if ASR_ENGINE != "google":
-        logging.error("需要 SpeechRecognition 包来实现内存桥接，退出守护进程。")
-        return
+    # 清理残留 arecord/aplay 进程
+    subprocess.run(["sudo", "killall", "-9", "arecord", "aplay"],
+                   stderr=subprocess.DEVNULL)
 
-    audio_buffer = bytearray()
-    
-    # 【最核心防御：管线式长链接拾音挂靠】
-    # 以 raw 格式无尽头拉取硬件内存流，拒绝重复调用 alsa init
-    arecord_cmd = [
-        "arecord", "-D", MIC_DEVICE, 
-        "-c", str(CHANNELS), "-r", str(SAMPLE_RATE), 
-        "-f", "S16_LE", "-t", "raw"
-    ]
-    logging.info(f"🎤 挂靠硬件 I2S 持续拾音管道: {' '.join(arecord_cmd)}")
-    
-    pipeline = subprocess.Popen(
-        arecord_cmd, 
-        stdout=subprocess.PIPE, 
-        stderr=subprocess.PIPE
-    )
+    # === 启动诊断 ===
+    logging.info("===== 启动诊断 =====")
+    logging.info("BAIDU_APP_ID: %s", "已配置(%s...)" % BAIDU_APP_ID[:4] if BAIDU_APP_ID else "未配置!")
+    logging.info("BAIDU_API_KEY: %s", "已配置(%s...)" % BAIDU_API_KEY[:4] if BAIDU_API_KEY else "未配置!")
+    logging.info("BAIDU_SECRET_KEY: %s", "已配置" if BAIDU_SECRET_KEY else "未配置!")
+    logging.info("录音设备: %s, 播放设备: %s", DEVICE_REC, DEVICE_SPK)
+    logging.info("VAD参数: SILENCE_LIMIT=%.1fs, WAKE_TIMEOUT=%ds, VAD_TIMEOUT=%ds",
+                 SILENCE_LIMIT, WAKE_TIMEOUT, VAD_TIMEOUT)
+    logging.info("====================")
 
-    flags = fcntl.fcntl(pipeline.stdout, fcntl.F_GETFL)
-    fcntl.fcntl(pipeline.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-
-    asr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    asr_futures = []
-    watchdog_count = 0
-
-    conversation_mode = False
-    silence_count = 0
-    chunk_count = 0
-    accumulated_text = ""
-    llm_reply_mtime = 0
-    
-    try:
+    client = _init_baidu()
+    if client is None:
+        logging.error("百度 AipSpeech 初始化失败，语音守护进程退出")
         while True:
-            # V2.3: 监听 总结陈词，教练主动念稿！(不阻塞回环)
-            if os.path.exists("/dev/shm/llm_reply.txt"):
-                try:
+            output_debug(0, "百度API未配置")
+            time.sleep(30)
+
+    # === 麦克风自测 ===
+    logging.info("麦克风自测: 录制1秒...")
+    test_ok = False
+    for dev in [DEVICE_REC, "hw:3,0", "hw:0,0"]:
+        try:
+            ret = subprocess.run(
+                ["sudo", "arecord", "-D" + dev, "-r%d" % REC_RATE,
+                 "-f", "S16_LE", "-c", "2", "-d", "1", "-q", "/tmp/mic_test.wav"],
+                timeout=5, capture_output=True)
+            sz = os.path.getsize("/tmp/mic_test.wav") if os.path.exists("/tmp/mic_test.wav") else 0
+            if ret.returncode == 0 and sz > 1000:
+                logging.info("麦克风自测通过: %s (录制 %d bytes)", dev, sz)
+                if dev != DEVICE_REC:
+                    logging.info("切换录音设备: %s → %s", DEVICE_REC, dev)
+                    globals()['DEVICE_REC'] = dev
+                test_ok = True
+                break
+            else:
+                logging.warning("设备 %s 录音失败 (exit=%d, size=%d)", dev, ret.returncode, sz)
+        except Exception as e:
+            logging.warning("设备 %s 测试异常: %s", dev, e)
+
+    if not test_ok:
+        logging.error("所有麦克风设备测试失败！语音功能不可用")
+        output_debug(0, "麦克风离线")
+
+    # 开机音效
+    speak(client, "教练已上线，随时准备指导", allow_interrupt=False)
+
+    global _is_muted, _violation_mtime
+    llm_reply_mtime = 0
+
+    while True:
+        # === 监听违规警报 (Task 5) ===
+        try:
+            if os.path.exists(VIOLATION_ALERT_FILE):
+                ts = os.path.getmtime(VIOLATION_ALERT_FILE)
+                if ts != _violation_mtime:
+                    _violation_mtime = ts
+                    with open(VIOLATION_ALERT_FILE, "r", encoding="utf-8") as f:
+                        alert_text = f.read().strip()
+                    if alert_text:
+                        logging.info("违规警报播报: %s", alert_text)
+                        speak(client, alert_text, allow_interrupt=True)
+        except Exception:
+            pass
+
+        # === 监听 DeepSeek 回复，自动朗读 ===
+        if not _is_muted:
+            try:
+                if os.path.exists("/dev/shm/llm_reply.txt"):
                     ts = os.path.getmtime("/dev/shm/llm_reply.txt")
                     if ts != llm_reply_mtime:
                         llm_reply_mtime = ts
                         with open("/dev/shm/llm_reply.txt", "r", encoding="utf-8") as f:
-                            sum_txt = f.read().strip()
-                        if sum_txt:
-                            logging.info(f"📢 并发下发长篇文字: {sum_txt}")
-                            async_speak_tts(sum_txt)
-                except Exception: pass
-                
-            # 非阻塞读取管道缓冲区
+                            reply_text = f.read().strip()
+                        if reply_text:
+                            logging.info("朗读教练回复: %s", reply_text[:50])
+                            speak(client, reply_text)
+            except Exception:
+                pass
+
+        # === 监听 chat_reply (对话回复)，自动朗读 ===
+        if not _is_muted:
             try:
-                data = pipeline.stdout.read(8000)
-                watchdog_count = 0
-            except BlockingIOError:
-                data = b""
-                watchdog_count += 1
-                time.sleep(0.05)
-                if watchdog_count > 60: # 超过3秒无数据(60*0.05s)，管道死锁
-                    logging.error("💥 arecord 管道意外断裂或超时死锁，强制清场重置！")
-                    output_debug(-1, "麦克风离线/管道断裂")
-                    pipeline.kill()
-                    time.sleep(2)
-                    pipeline = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    flags = fcntl.fcntl(pipeline.stdout, fcntl.F_GETFL)
-                    fcntl.fcntl(pipeline.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-                    watchdog_count = 0
-                    continue
-            except Exception as e:
-                logging.error(f"读取异常: {e}")
-                time.sleep(0.1)
-                continue
-                
-            if not data and pipeline.poll() is not None:
-                logging.error("💥 arecord 进程死亡，重启！")
-                time.sleep(2)
-                pipeline = subprocess.Popen(arecord_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                flags = fcntl.fcntl(pipeline.stdout, fcntl.F_GETFL)
-                fcntl.fcntl(pipeline.stdout, fcntl.F_SETFL, flags | os.O_NONBLOCK)
-                watchdog_count = 0
-                continue
-                
-            if data:
-                chunk_count += 1
-                energy = get_audio_energy(data)
-                
-                # 若处于静默期
-                if energy < SILENCE_THRESHOLD:
-                    if chunk_count % 10 == 0:
-                        output_debug(energy, "")
-                        output_voice_status(conversation_mode, energy)
-                        
-                    silence_count += 1
-                    if len(audio_buffer) > 16000: # 有积攒的语音数据
-                        if silence_count > 10:    # 确认停顿 (约1.25秒)
-                            audio_obj = sr.AudioData(bytes(audio_buffer), SAMPLE_RATE, 2)
-                            audio_buffer.clear()
-                            
-                            # 一键提交至后台异线程池，不阻塞管道读取！
-                            f = asr_executor.submit(process_asr, audio_obj, energy)
-                            asr_futures.append(f)
-                            
-                    if conversation_mode and silence_count > 25 and len(asr_futures) == 0: # 2.5秒彻底没话说，且队列排空
-                        logging.info("⏸️ 侦测到静默，结束录音阶段。")
-                        if accumulated_text.strip():
-                            with open(CHAT_INPUT_FILE + ".tmp", "w", encoding="utf-8") as f:
-                                f.write(accumulated_text.strip())
-                            os.rename(CHAT_INPUT_FILE + ".tmp", CHAT_INPUT_FILE)
-                            logging.info(f"📝 投递句子: {accumulated_text.strip()}")
-                            accumulated_text = ""
-                        else:
-                            logging.warning("录制了死空集，不予投递")
-                            async_speak_tts("抱歉，我没听清。")
+                if os.path.exists("/dev/shm/chat_reply.txt"):
+                    ts = os.path.getmtime("/dev/shm/chat_reply.txt")
+                    if ts != getattr(main, '_chat_reply_mtime', 0):
+                        main._chat_reply_mtime = ts
+                        with open("/dev/shm/chat_reply.txt", "r", encoding="utf-8") as f:
+                            chat_text = f.read().strip()
+                        if chat_text:
+                            logging.info("朗读对话回复: %s", chat_text[:50])
+                            speak(client, chat_text)
+            except Exception:
+                pass
 
-                        conversation_mode = False
-                        silence_count = 0
-                        try:
-                            os.remove("/dev/shm/chat_active")
-                            os.remove("/dev/shm/chat_draft.txt")
-                        except OSError: pass
+        # === 唤醒监听: 录音 → STT → 检查关键词 ===
+        output_debug(0, "待机中..." if not _is_muted else "静音待机...")
+        status = record_with_vad(timeout=WAKE_TIMEOUT)
+
+        if status == "SILENCE":
+            continue
+
+        if status == "SUCCESS":
+            text = sound2text(client)
+            if not text:
+                continue
+
+            output_debug(0, text)
+
+            # 静音状态下只响应解除静音命令
+            if _is_muted:
+                if any(w in text for w in ["解除静音", "你可以说话", "恢复对话", "说话"]):
+                    _is_muted = False
+                    _write_signal("/dev/shm/mute_signal.json", {"muted": False, "ts": time.time()})
+                    speak(client, "已解除静音", allow_interrupt=False)
                 else:
-                    # 处于发声期
-                    silence_count = 0
-                    audio_buffer.extend(data)
-                    if chunk_count % 5 == 0:
-                        output_debug(energy, "[录音中...]")
-                        output_voice_status(conversation_mode, energy)
-            
-            # 回收检查 ASR 结果 (非阻塞轮询)
-            done_futures = [f for f in asr_futures if f.done()]
-            for f in done_futures:
-                asr_futures.remove(f)
-                text, f_energy = f.result()
-                output_debug(f_energy, text)
-                
-                if text:
-                    if not conversation_mode:
-                        is_wake = any(w in text.lower() for w in WAKE_WORDS)
-                        if is_wake:
-                            logging.info("⚡ 唤醒词击穿! 执行强压制策略，剥夺既有语音输出！")
-                            _graceful_stop_audio()
-                            conversation_mode = True
-                            _last_wake_time = int(time.time())
-                            output_voice_status(True, f_energy)
-                            try:
-                                open("/dev/shm/chat_active", "w").close()
-                            except: pass
-                            async_speak_tts(TTS_REPLY)
-                            remaining = ""
-                            for w in WAKE_WORDS:
-                                if w in text:
-                                    remaining = text.split(w, 1)[-1].strip()
-                                    if remaining: break
-                            if remaining:
-                                accumulated_text = remaining
-                    else:
-                        accumulated_text += (" " if accumulated_text else "") + text
-                        try:
-                            with open("/dev/shm/chat_draft.txt.tmp", "w") as fdraft:
-                                fdraft.write(accumulated_text)
-                            os.rename("/dev/shm/chat_draft.txt.tmp", "/dev/shm/chat_draft.txt")
-                        except: pass
+                    logging.info("静音中，忽略: %s", text)
+                continue
 
-    except KeyboardInterrupt:
-        logging.info("收到中止命令。休眠管道...")
-    finally:
-        pipeline.terminate()
-        pipeline.wait()
+            # 检查唤醒词
+            is_wake = any(w in text for w in WAKE_WORDS)
+            if not is_wake:
+                logging.info("非唤醒语句，忽略: %s", text)
+                continue
+
+            # === 唤醒成功 → 进入对话模式 ===
+            logging.info("唤醒词命中: %s", text)
+
+            # 提取唤醒词后面的内容
+            remaining = ""
+            for w in WAKE_WORDS:
+                if w in text:
+                    remaining = text.split(w, 1)[-1].strip()
+                    if remaining:
+                        break
+
+            if remaining and len(remaining) >= 2:
+                # 唤醒词后面直接带了指令 — 先尝试系统命令
+                logging.info("唤醒 + 指令: %s", remaining)
+                if not _try_voice_command(client, remaining):
+                    speak(client, "收到", allow_interrupt=False)
+                    _deliver_to_fsm(remaining)
+                continue
+
+            # 无后续指令 — 提示说话
+            speak(client, "我在，请说", allow_interrupt=False)
+
+            # 等待用户说具体内容
+            try:
+                open("/dev/shm/chat_active", "w").close()
+            except OSError:
+                pass
+
+            status2 = record_with_vad(timeout=VAD_TIMEOUT)
+            if status2 == "SUCCESS":
+                text2 = sound2text(client)
+                if text2 and len(text2) >= 2:
+                    logging.info("对话内容: %s", text2)
+                    # 先尝试系统命令
+                    if not _try_voice_command(client, text2):
+                        _deliver_to_fsm(text2)
+                else:
+                    speak(client, "没听清，请再说一次")
+            else:
+                speak(client, "没有听到声音")
+
+            try:
+                os.remove("/dev/shm/chat_active")
+            except OSError:
+                pass
+
+
+def _deliver_to_fsm(text):
+    """将用户语音文字投递到 FSM 的 chat_input 信号文件"""
+    try:
+        tmp = CHAT_INPUT_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.rename(tmp, CHAT_INPUT_FILE)
+        logging.info("投递到 FSM: %s", text)
+    except Exception as e:
+        logging.error("投递失败: %s", e)
+
+
+# ===== 语音调控命令 (Task 2) =====
+def _try_voice_command(client, text):
+    # type: (object, str) -> bool
+    """检查是否是系统命令, 是则执行并返回True, 否则返回False让文字投递到FSM"""
+    global _is_muted
+
+    # 静音
+    if any(w in text for w in ["安静", "闭嘴", "静音", "别吵"]):
+        _is_muted = True
+        _write_signal("/dev/shm/mute_signal.json", {"muted": True, "ts": time.time()})
+        speak(client, "好的，我保持安静，说解除静音可以恢复", allow_interrupt=False)
+        logging.info("命令: 静音")
+        return True
+
+    # 解除静音
+    if any(w in text for w in ["解除静音", "你可以说话", "恢复对话", "说话", "别装死"]):
+        _is_muted = False
+        _write_signal("/dev/shm/mute_signal.json", {"muted": False, "ts": time.time()})
+        speak(client, "已解除静音", allow_interrupt=False)
+        logging.info("命令: 解除静音")
+        return True
+
+    # 切换到深蹲
+    if any(w in text for w in ["切换到深蹲", "深蹲模式", "做深蹲"]):
+        _write_signal("/dev/shm/exercise_mode.json", {"mode": "squat", "ts": time.time()})
+        speak(client, "已切换到深蹲模式", allow_interrupt=False)
+        logging.info("命令: 切换到深蹲")
+        return True
+
+    # 切换到弯举
+    if any(w in text for w in ["切换到弯举", "弯举模式", "做弯举"]):
+        _write_signal("/dev/shm/exercise_mode.json", {"mode": "curl", "ts": time.time()})
+        speak(client, "已切换到弯举模式", allow_interrupt=False)
+        logging.info("命令: 切换到弯举")
+        return True
+
+    # 飞书推送
+    if any(w in text for w in ["推送健身规划", "发飞书", "推送飞书", "飞书"]):
+        speak(client, "正在生成健身规划并推送到飞书", allow_interrupt=False)
+        logging.info("命令: 飞书推送")
+        try:
+            import urllib
+            if hasattr(urllib, 'request'):
+                req = urllib.request.Request(
+                    "http://127.0.0.1:5000/api/feishu/send_plan",
+                    data=b'{}',
+                    headers={"Content-Type": "application/json"})
+                resp = urllib.request.urlopen(req, timeout=30)
+                result = json.loads(resp.read().decode())
+                if result.get("ok"):
+                    speak(client, "健身规划已推送到飞书", allow_interrupt=False)
+                else:
+                    speak(client, "推送失败: %s" % result.get("error", "未知错误")[:20], allow_interrupt=False)
+            else:
+                # Python 2 fallback
+                import urllib2
+                req = urllib2.Request(
+                    "http://127.0.0.1:5000/api/feishu/send_plan",
+                    data=b'{}',
+                    headers={"Content-Type": "application/json"})
+                resp = urllib2.urlopen(req, timeout=30)
+                speak(client, "健身规划已推送到飞书", allow_interrupt=False)
+        except Exception as e:
+            logging.error("飞书推送异常: %s", e)
+            speak(client, "飞书推送失败", allow_interrupt=False)
+        return True
+
+    # 修改疲劳上限 (如 "疲劳目标改为2000")
+    import re
+    m = re.search(r'(\d{3,5})', text)
+    if m and any(w in text for w in ["疲劳", "目标", "上限"]):
+        limit = int(m.group(1))
+        _write_signal("/dev/shm/fatigue_limit.json", {"limit": limit, "ts": time.time()})
+        speak(client, "疲劳上限已改为%d" % limit, allow_interrupt=False)
+        logging.info("命令: 疲劳上限改为 %d", limit)
+        return True
+
+    return False
+
+
+def _write_signal(path, data):
+    # type: (str, dict) -> None
+    """原子写入信号文件"""
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.rename(tmp, path)
+    except Exception as e:
+        logging.error("写信号文件失败 %s: %s", path, e)
+
 
 if __name__ == "__main__":
     main()

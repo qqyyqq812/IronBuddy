@@ -149,3 +149,147 @@ ssh toybrick@10.105.245.224 "supervisord -n -c /home/toybrick/deploy/ironbuddy-s
 ssh toybrick@10.105.245.224 "supervisorctl -c /home/toybrick/deploy/ironbuddy-supervisor.conf status"
 ```
 
+---
+
+## 五、V3.1 管理面板 (Admin Console)
+
+V3.1 新增了 Web 管理面板，可以在浏览器中管理整个 IronBuddy 系统。
+
+### 访问方式
+
+**本地开发机（推荐）**：
+```bash
+cd ~/projects/embedded-fullstack
+python3 streamer_app.py
+# 浏览器打开 http://localhost:5000/admin
+```
+
+**板端运行时**：
+```
+http://10.105.245.224:5000/admin
+```
+
+### 6 个功能模块
+
+| 模块 | 功能 | 使用场景 |
+|------|------|---------|
+| **Overview** | 系统总览：板子在线状态、训练数据统计、模型信息、快速启停 | 日常第一眼查看 |
+| **Services** | 5个服务运行状态（Vision/Streamer/FSM/EMG/Voice），一键启动/停止 | 部署和调试 |
+| **Training Data** | 按动作类型和标签（golden/lazy/bad）分类浏览所有CSV训练数据 | 数据管理 |
+| **History** | 训练历史记录（每次session的标准次数、违规次数、合格率） | 训练复盘 |
+| **System** | 板端CPU温度和运行时间、云端GPU状态（显存/利用率）、网络配置 | 硬件监控 |
+| **Project** | Git分支/提交历史、GRU模型参数、TensorBoard训练记录 | 版本管理 |
+
+### API 端点列表
+
+所有管理API均以 `/api/admin/` 开头：
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/api/admin/overview` | GET | 系统总览数据 |
+| `/api/admin/services` | GET | 5个服务运行状态 |
+| `/api/admin/start` | POST | 启动全部服务（等效 start_validation.sh） |
+| `/api/admin/stop` | POST | 停止全部服务（等效 stop_validation.sh） |
+| `/api/admin/training_data` | GET | 训练数据文件列表 |
+| `/api/admin/system_info` | GET | GPU/板子/网络状态 |
+| `/api/admin/project_info` | GET | Git/模型/配置信息 |
+
+---
+
+## 六、PPT 生成工作流 (PPTSkills)
+
+项目集成了 Claude Code + PPTSkills 工作流，可以从 Markdown 内容一键生成可编辑的 `.pptx` 文件。
+
+### 环境要求
+
+| 工具 | 版本要求 | 安装命令 |
+|------|---------|---------|
+| Node.js | >= v18 | `nvm install --lts` |
+| Claude Code | 最新 | `npm install -g @anthropic-ai/claude-code` |
+| PPTSkills | 最新 | `npx skills add https://github.com/anthropics/skills --skill pptx --agent claude-code -y` |
+| pptxgenjs | 最新 | `npm install -g pptxgenjs` |
+| markitdown | 最新 | `pip install "markitdown[pptx]"` |
+| LibreOffice | 任意 | `sudo apt install libreoffice-impress poppler-utils` |
+
+### 生成 PPT 的步骤
+
+**1. 准备内容文件**
+
+PPT内容基于 Marp Markdown 文件：
+```
+docs/presentations/最终展示汇报_V2.md    # 最新版本
+docs/presentations/最终展示汇报_Marp.md  # 原始版本
+```
+
+**2. 在 Claude Code 中生成 .pptx**
+
+在项目根目录运行 `claude`，然后输入：
+
+```
+/pptx 在 docs/presentations/ 目录里有一个名为 最终展示汇报_V2.md 的文件，
+
+请根据这个 Markdown 文件的内容，制作一份25张幻灯片的项目汇报 PPT，要求输出可编辑的 .pptx 文件。
+
+演讲框架（请严格按照以下结构分配幻灯片）：
+
+封面 (1张)：标题、汇报人、日期
+目录 (1张)：列出主要章节
+项目简介 (2张)：受众、痛点、核心区别
+网络配置 (3张)：ICS直连、25秒延时、IP检测
+硬件外设 (3张)：摄像头推流、蜂鸣器→音箱、语音系统
+神经网络 (2张)：YOLOv5选型、NPU→云端RTMPose
+状态机 (2张)：深蹲FSM、弯举FSM
+大模型对接 (3张)：OpenClaw、语音交互、飞书推送
+系统架构 (2张)：三层架构、零延迟策略
+V2升级 (2张)：热力图、V2.2迭代
+拓展模块 (3张)：传感器、GRU训练、管理面板
+致谢 (1张)
+
+内容要求：
+- 每张幻灯片标题简洁明确，正文以要点形式呈现，每条要点不超过 20 字
+- 涉及数据或比较结果时，请用表格或列表形式组织，不要大段文字
+- 语言为中文，专业术语保留英文原文
+- 关键数值、核心结论请加粗突出
+
+设计风格：
+- 配色方案：科技深蓝风，深蓝 (#1E2761) 搭配冰蓝 (#CADCFC)，白色背景
+- 字体层次清晰：标题大、正文适中，重要数据或结论可加粗突出
+- 每张幻灯片保留适当留白，避免信息过载
+- 卡片式布局区分不同模块，提升视觉层次感
+
+输出到 docs/presentations/IronBuddy_汇报.pptx
+```
+
+**3. QA 检查**
+
+```bash
+# 检查文字内容
+python -m markitdown docs/presentations/IronBuddy_汇报.pptx
+
+# 转换为图片检查排版（需要 LibreOffice + Poppler）
+python ~/.claude/skills/pptx/scripts/office/soffice.py --headless --convert-to pdf docs/presentations/IronBuddy_汇报.pptx
+pdftoppm -jpeg -r 150 docs/presentations/IronBuddy_汇报.pdf slide
+```
+
+**4. 后续编辑**
+
+生成的 `.pptx` 文件可以用 PowerPoint 或 WPS 直接打开编辑：
+- 修改文字内容
+- 调整配色和字体
+- 插入实际截图替换占位图
+- 增删幻灯片
+
+### 复用指南
+
+以后需要生成新PPT时，只需要：
+1. 准备好内容的 Markdown 文件（或PDF、Word、纯文字描述）
+2. 在 Claude Code 中运行 `/pptx` 命令 + 你的要求
+3. PPTSkills 会自动调用 pptxgenjs 生成 .pptx 文件
+4. 用 markitdown 检查内容，用 LibreOffice 转图片检查排版
+
+支持的输入格式：
+- `.md` Markdown 文件
+- `.pdf` PDF 文件
+- `.docx` Word 文档
+- 纯文字描述（直接在指令中写）
+

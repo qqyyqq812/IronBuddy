@@ -15,7 +15,8 @@ UDP_IP = "0.0.0.0"
 UDP_PORT = 8080
 
 # 全局状态，用于解耦 DSP 高频线程和 IO 低频写盘线程
-CURRENT_RMS_PCT = 0
+# 双通道: ch0=目标肌肉(股四头肌/肱二头肌), ch1=代偿肌肉(臀肌/背阔肌)
+CURRENT_RMS_PCT = [0, 0]
 IS_CONNECTED = False
 LAST_ALIVE_TS = 0
 
@@ -52,17 +53,19 @@ def dsp_receiver_worker():
     sock.settimeout(0.5)
     logging.info(f"[*] 🚀 生物电 DSP 流水线挂载完毕: UDP_EMG 无锁监听端口 {UDP_PORT}")
     
-    # 实例化滤波器流水线
-    hp_filter = get_highpass_20hz()
-    notch_filter = get_notch_50hz()
-    lp_filter = get_lowpass_150hz()
-    
-    # 积分包络窗口 (100ms)
-    window_size = 100
-    rms_ring = deque(maxlen=window_size)
-    sum_sq = 0.0
-    
+    # 双通道 DSP 流水线
+    filters = []
+    for _ in range(2):
+        filters.append({
+            'hp': get_highpass_20hz(),
+            'notch': get_notch_50hz(),
+            'lp': get_lowpass_150hz(),
+            'ring': deque(maxlen=100),
+            'sum_sq': 0.0,
+        })
+
     timeout_warn_emitted = False
+    pkt_count = 0
 
     while True:
         try:
@@ -70,51 +73,64 @@ def dsp_receiver_worker():
             if timeout_warn_emitted:
                 logging.info(f"🟢 [恢复] UDP 数据流已于 {addr} 闪电重连。")
                 timeout_warn_emitted = False
-            
+
             IS_CONNECTED = True
             LAST_ALIVE_TS = time.time()
-            
-            if len(data) > 0:
+
+            if len(data) == 0:
+                continue
+
+            raw = data.decode('ascii').strip()
+            parts = raw.split()
+
+            # 支持: "123.4 567.8"(双通道) 或 "123.4"(单通道兼容)
+            vals = []
+            for p in parts:
                 try:
-                    val = float(data.decode('ascii').strip())
+                    vals.append(float(p))
                 except ValueError:
-                    continue
-                
-                # --- DSP Pipeline ---
-                # 1. Highpass (Remove Baseline Wander & DC Offset)
-                y1 = hp_filter.process(val)
-                # 2. Notch (Remove 50Hz Mains Noise)
-                y2 = notch_filter.process(y1)
-                # 3. Lowpass (Remove High-Freq Noise)
-                y3 = lp_filter.process(y2)
-                
-                # 4. Rectification & RMS Envelope
+                    pass
+
+            if not vals:
+                continue
+
+            # 首包打日志
+            pkt_count += 1
+            if pkt_count == 1:
+                logging.info(f"📡 首包来自 {addr}: [{raw}] → {len(vals)}通道")
+
+            # 对每个通道走 DSP
+            for ch in range(min(len(vals), 2)):
+                f = filters[ch]
+                val = vals[ch]
+                y1 = f['hp'].process(val)
+                y2 = f['notch'].process(y1)
+                y3 = f['lp'].process(y2)
+
                 y_sq = y3 * y3
-                if len(rms_ring) == window_size:
-                    sum_sq -= rms_ring[0]
-                rms_ring.append(y_sq)
-                sum_sq += y_sq
-                
-                rms = math.sqrt(max(0, sum_sq) / len(rms_ring))
-                
-                # 5. Mapping to 0-100% (Empirical scale for 12-bit ADC EMG swings)
-                # 满发力时，滤波后振幅 RMS 大约在 200~600 左右
+                if len(f['ring']) == f['ring'].maxlen:
+                    f['sum_sq'] -= f['ring'][0]
+                f['ring'].append(y_sq)
+                f['sum_sq'] += y_sq
+
+                rms = math.sqrt(max(0, f['sum_sq']) / max(1, len(f['ring'])))
                 rms_mapped = min(100, int((rms / 400.0) * 100))
-                
-                # 引入非常轻微的静息阈值防止数值抖动
                 if rms_mapped < 4:
                     rms_mapped = 0
-                
-                # 更新共享变量供 IO 线程异步读取
-                CURRENT_RMS_PCT = rms_mapped
+                CURRENT_RMS_PCT[ch] = rms_mapped
+
+            # 单通道时,两个通道都用同一个值
+            if len(vals) == 1:
+                CURRENT_RMS_PCT[1] = CURRENT_RMS_PCT[0]
 
         except socket.timeout:
             if not timeout_warn_emitted:
                 logging.warning("🚨 [心跳报警] UDP 长达 500ms 阻断！传感器可能脱落。")
                 timeout_warn_emitted = True
             IS_CONNECTED = False
-            CURRENT_RMS_PCT = 0
-            
+            CURRENT_RMS_PCT[0] = 0
+            CURRENT_RMS_PCT[1] = 0
+
         except Exception as e:
             logging.error(f"DSP 流水线异常: {e}")
             time.sleep(1)
@@ -137,17 +153,34 @@ def io_dumper_worker():
             time.sleep(0.5)
             continue
 
-        pct = CURRENT_RMS_PCT
+        target_pct = CURRENT_RMS_PCT[0]  # ch0: 目标肌肉
+        comp_pct   = CURRENT_RMS_PCT[1]  # ch1: 代偿肌肉
         warnings = []
 
-        # 将该通道数据强力扩散至全部四肢反馈，便于观察
-        acts = {
-            "quadriceps": pct,
-            "glutes": pct,
-            "calves": pct,
-            "biceps": pct
-        }
-        out = {"activations": acts, "warnings": warnings, "exercise": "squat"}
+        # 读当前运动类型决定映射
+        exercise = "squat"
+        try:
+            if os.path.exists('/dev/shm/user_profile.json'):
+                with open('/dev/shm/user_profile.json', 'r') as f:
+                    exercise = json.load(f).get('exercise', 'squat')
+        except Exception:
+            pass
+
+        if exercise == "bicep_curl":
+            acts = {
+                "quadriceps": comp_pct,
+                "glutes": comp_pct,
+                "calves": 0,
+                "biceps": target_pct
+            }
+        else:
+            acts = {
+                "quadriceps": target_pct,
+                "glutes": target_pct,
+                "calves": 0,
+                "biceps": comp_pct
+            }
+        out = {"activations": acts, "warnings": warnings, "exercise": exercise}
 
         try:
             with open('/dev/shm/muscle_activation.json.tmp', 'w') as f:

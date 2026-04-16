@@ -8,6 +8,7 @@ import logging
 import numpy as np
 import torch
 from cognitive.openclaw_bridge import OpenClawBridge
+from cognitive.deepseek_direct import DeepSeekDirect
 from ai_sensory.asr_worker import ASRWorker
 from sensor.microphone import MicrophoneController
 from cognitive.fusion_model import CompensationGRU, load_model, _compute_derived_features
@@ -100,12 +101,18 @@ class SquatStateMachine:
 
     def trigger_buzzer_alert(self):
         now = time.time()
-        if now - self._last_buzzer_time < 0.5:
+        if now - self._last_buzzer_time < 3.0:
             return
         self._last_buzzer_time = now
-        # [紧急禁音] 屏蔽物理音箱调用，防止自习室爆鸣
-        # os.system("bash /home/toybrick/hardware_engine/peripherals/buzzer_alert.sh &")
-        logging.warning("🔊 音箱警报！动作判定违规！(已触发静音保护不发声)")
+        # 通过信号文件通知 voice_daemon 播报违规
+        try:
+            tmp = "/dev/shm/violation_alert.txt.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("动作不标准，请注意姿势")
+            os.rename(tmp, "/dev/shm/violation_alert.txt")
+            logging.warning("🔊 违规警报已发送到 voice_daemon")
+        except Exception as e:
+            logging.error("违规警报写入失败: %s", e)
 
     def _read_emg(self):
         try:
@@ -115,7 +122,11 @@ class SquatStateMachine:
         except Exception:
             return {}
 
+    _last_nn_result = None  # class-level cache for latest GRU result
+
     def sync_to_frontend(self, current_angle=180.0, nn_result=None):
+        if nn_result is not None:
+            SquatStateMachine._last_nn_result = nn_result
         try:
             emg_feats = self._read_emg()
             state_data = {
@@ -126,7 +137,6 @@ class SquatStateMachine:
                 "fatigue": round(self.total_fatigue_volume, 1),
                 "chat_active": os.path.exists("/dev/shm/chat_active"),
                 "exercise": "squat",
-                # 暴露给前端做渲染
                 "emg_activations": [
                     emg_feats.get("quadriceps", 0),
                     emg_feats.get("glutes", 0),
@@ -134,12 +144,13 @@ class SquatStateMachine:
                     emg_feats.get("biceps", 0)
                 ]
             }
-            # NN 推理结果 (由 Agent 3 注入)
-            if nn_result:
-                state_data["similarity"]     = nn_result.get("similarity", 0.0)
-                state_data["classification"] = nn_result.get("classification", "unknown")
-                state_data["nn_confidence"]  = nn_result.get("confidence", 0.0)
-                state_data["nn_phase"]       = nn_result.get("phase", "unknown")
+            # NN 推理结果 — 使用缓存保证每帧都有
+            cached = SquatStateMachine._last_nn_result
+            if cached and self.state != "NO_PERSON":
+                state_data["similarity"]     = cached.get("similarity", 0.0)
+                state_data["classification"] = cached.get("classification", "unknown")
+                state_data["nn_confidence"]  = cached.get("confidence", 0.0)
+                state_data["nn_phase"]       = cached.get("phase", "unknown")
 
             with open("/dev/shm/fsm_state.json.tmp", "w", encoding="utf-8") as rf:
                 json.dump(state_data, rf)
@@ -168,7 +179,7 @@ class SquatStateMachine:
                 return None
 
             obj = objects[0]
-            if obj.get("score", 0) < 0.15:
+            if obj.get("score", 0) < 0.05:
                 self.state = "NO_PERSON"
                 self.sync_to_frontend()
                 return None
@@ -177,10 +188,17 @@ class SquatStateMachine:
             if len(kpts) < 17:
                 return None
 
-            # 智能择优捕获：根据左右腿三关节点的综合置信度，选出朝向摄像头无遮挡的一侧
+            # 关键点置信度过滤: 低于阈值的坐标不可信, 跳过此帧
+            MIN_KPT_CONF = 0.05
             l_score = kpts[11][2] + kpts[13][2] + kpts[15][2]
             r_score = kpts[12][2] + kpts[14][2] + kpts[16][2]
-            
+            best_score = max(l_score, r_score)
+
+            # 三个关键点(髋/膝/踝)的平均置信度 < 阈值 → 骨架不可信
+            if best_score / 3.0 < MIN_KPT_CONF:
+                # 置信度太低，不更新状态
+                return None
+
             if l_score > r_score:
                 hip   = [kpts[11][0], kpts[11][1]]
                 knee  = [kpts[13][0], kpts[13][1]]
@@ -190,6 +208,17 @@ class SquatStateMachine:
                 knee  = [kpts[14][0], kpts[14][1]]
                 ankle = [kpts[16][0], kpts[16][1]]
             raw_angle = self.calculate_angle(hip, knee, ankle)
+
+            # 角度合理性过滤 (Task 4): 量化模型噪声产生不可能的角度
+            if raw_angle < 20 or raw_angle > 175:
+                logging.debug("角度异常丢弃: %.1f° (合理范围 20-175)", raw_angle)
+                return None
+
+            # 关键点间距检查: 髋-踝太近 = 关键点重叠不可信
+            dist_ha = math.hypot(hip[0] - ankle[0], hip[1] - ankle[1])
+            if dist_ha < 30:
+                logging.debug("关键点间距过小: %.1f px, 丢弃此帧", dist_ha)
+                return None
 
             self._angle_history.append(raw_angle)
             if len(self._angle_history) > 16:
@@ -284,10 +313,17 @@ class DumbbellCurlFSM:
 
     def trigger_buzzer_alert(self):
         now = time.time()
-        if now - self._last_buzzer_time < 0.5:
+        if now - self._last_buzzer_time < 3.0:
             return
         self._last_buzzer_time = now
-        logging.warning("🔊 音箱警报！动作判定违规！(已触发静音保护)")
+        try:
+            tmp = "/dev/shm/violation_alert.txt.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write("弯举不标准，请收缩到位")
+            os.rename(tmp, "/dev/shm/violation_alert.txt")
+            logging.warning("🔊 弯举违规警报已发送到 voice_daemon")
+        except Exception as e:
+            logging.error("违规警报写入失败: %s", e)
 
     def _read_emg(self):
         try:
@@ -297,7 +333,11 @@ class DumbbellCurlFSM:
         except Exception:
             return {}
 
+    _last_nn_result = None
+
     def sync_to_frontend(self, current_angle=180.0, nn_result=None):
+        if nn_result is not None:
+            DumbbellCurlFSM._last_nn_result = nn_result
         try:
             emg_feats = self._read_emg()
             state_data = {
@@ -315,9 +355,10 @@ class DumbbellCurlFSM:
                     emg_feats.get("triceps", 0)
                 ]
             }
-            if nn_result:
-                state_data["similarity"]     = nn_result.get("similarity", 0.0)
-                state_data["classification"] = nn_result.get("classification", "unknown")
+            cached = DumbbellCurlFSM._last_nn_result
+            if cached and self.state != "NO_PERSON":
+                state_data["similarity"]     = cached.get("similarity", 0.0)
+                state_data["classification"] = cached.get("classification", "unknown")
                 state_data["nn_confidence"]  = nn_result.get("confidence", 0.0)
                 state_data["nn_phase"]       = nn_result.get("phase", "unknown")
 
@@ -336,7 +377,7 @@ class DumbbellCurlFSM:
                 return None
 
             obj = objects[0]
-            if obj.get("score", 0) < 0.15:
+            if obj.get("score", 0) < 0.05:
                 self.state = "NO_PERSON"
                 self.sync_to_frontend()
                 return None
@@ -345,9 +386,12 @@ class DumbbellCurlFSM:
             if len(kpts) < 17:
                 return None
 
+            MIN_KPT_CONF = 0.05
             l_score = kpts[5][2] + kpts[7][2] + kpts[9][2]
             r_score = kpts[6][2] + kpts[8][2] + kpts[10][2]
-            
+            if max(l_score, r_score) / 3.0 < MIN_KPT_CONF:
+                return None
+
             if l_score > r_score:
                 shoulder = [kpts[5][0], kpts[5][1]]
                 elbow    = [kpts[7][0], kpts[7][1]]
@@ -358,6 +402,17 @@ class DumbbellCurlFSM:
                 wrist    = [kpts[10][0], kpts[10][1]]
                 
             raw_angle = self.calculate_angle(shoulder, elbow, wrist)
+
+            # 角度合理性过滤 (Task 4)
+            if raw_angle < 10 or raw_angle > 175:
+                logging.debug("弯举角度异常丢弃: %.1f°", raw_angle)
+                return None
+
+            # 关键点间距检查
+            dist_sw = math.hypot(shoulder[0] - wrist[0], shoulder[1] - wrist[1])
+            if dist_sw < 20:
+                logging.debug("弯举关键点间距过小: %.1f px", dist_sw)
+                return None
 
             self._angle_history.append(raw_angle)
             if len(self._angle_history) > 16:
@@ -428,11 +483,7 @@ async def _deepseek_fire_and_forget(bridge, prompt, good_count, failed_count):
             except Exception as e:
                 logging.error(f"下发回复至内存盘失败: {e}")
 
-            try:
-                feishu_msg = f"🏋️ IronBuddy 训练速报\n✅ 标准: {good_count}  ⚠️ 违规: {failed_count}\n💬 {reply}"
-                await bridge.deliver(feishu_msg, channel="feishu")
-            except Exception as e:
-                logging.error(f"飞书推送失败: {e}")
+            # 飞书推送已改为手动/语音触发，不再自动推送每次训练点评
             return
         except Exception as e:
             logging.error(f"❌ [后台] 尝试 {attempt+1} 异常: {e}")
@@ -450,14 +501,47 @@ async def main():
         except OSError:
             pass
 
-    gateway_url = os.environ.get("OPENCLAW_URL", "ws://127.0.0.1:18789")
-    bridge = OpenClawBridge(gateway_url=gateway_url)
-    connected = await bridge.connect()
+    # LLM 后端切换: LLM_BACKEND=direct 使用 DeepSeek 直连, 否则走 OpenClaw Gateway
+    llm_backend = os.environ.get("LLM_BACKEND", "direct").lower()
+    bridge = None
+    connected = False
+    if llm_backend == "direct":
+        logging.info("LLM 后端: DeepSeek Direct (绕过 Gateway)")
+        try:
+            bridge = DeepSeekDirect(soul_text=_SOUL_TEXT[:500] if _SOUL_TEXT else "")
+            connected = await bridge.connect()
+        except Exception as _e:
+            logging.warning("DeepSeek Direct 初始化失败: %s", _e)
+            connected = False
+        if not connected:
+            # 直连失败，尝试回退到 OpenClaw
+            logging.warning("DeepSeek Direct 不可用，尝试 OpenClaw Gateway")
+            try:
+                gateway_url = os.environ.get("OPENCLAW_URL", "ws://127.0.0.1:18789")
+                bridge = OpenClawBridge(gateway_url=gateway_url)
+                connected = await bridge.connect()
+            except Exception as _e:
+                logging.warning("OpenClaw Gateway 也不可用: %s", _e)
+                connected = False
+    else:
+        logging.info("LLM 后端: OpenClaw Gateway")
+        try:
+            gateway_url = os.environ.get("OPENCLAW_URL", "ws://127.0.0.1:18789")
+            bridge = OpenClawBridge(gateway_url=gateway_url)
+            connected = await bridge.connect()
+        except Exception as _e:
+            logging.warning("OpenClaw Gateway 连接失败: %s", _e)
+            connected = False
+
+    if not connected:
+        logging.warning("⚠️ 所有 LLM 后端均不可用，FSM 将以纯视觉模式运行（无 AI 对话）")
+        bridge = None
     
     current_exercise = "squat"
     fsm = SquatStateMachine()
     _last_deepseek_time = time.time()
     _ds_lock = [False]
+    _fatigue_limit = [1500]  # 可通过语音调整
 
     async def _ds_wrapper(b, p, g, f):
         try:
@@ -557,49 +641,92 @@ async def main():
                         1.0,         # Symmetry_Score placeholder
                         phase_prog,
                     ])
-                    if len(_gru_feature_buf) > _GRU_WINDOW_SIZE:
+                    if len(_gru_feature_buf) > 200:  # keep ~10s buffer
                         _gru_feature_buf.pop(0)
 
-                    _gru_frame_ctr += 1
-                    nn_result = None
-                    if (
-                        _GRU_MODEL is not None
-                        and len(_gru_feature_buf) >= _GRU_WINDOW_SIZE
-                        and _gru_frame_ctr % _GRU_INFER_EVERY == 0
-                    ):
-                        try:
-                            window = np.array(_gru_feature_buf[-_GRU_WINDOW_SIZE:],
-                                              dtype=np.float32)
-                            # normalise in-place (same as SquatDataset)
-                            window[:, 1] /= 180.0   # Angle
-                            window[:, 3] /= 100.0   # Target_RMS
-                            window[:, 4] /= 100.0   # Comp_RMS
-                            window[:, 2]  = np.clip(window[:, 2] / 10.0, -1.0, 1.0)
-                            nn_result = _GRU_MODEL.infer(window)
-                        except Exception as _e:
-                            logging.debug(f"[GRU] infer error: {_e}")
+                    # GRU 推理：仅在一个完整动作结束时触发
+                    # 检测 rep 计数是否变化（good 或 failed 增加了）
+                    _cur_reps = getattr(fsm, 'good_squats', 0) + getattr(fsm, 'failed_squats', 0) + \
+                                getattr(fsm, '_good_reps', 0) + getattr(fsm, '_failed_reps', 0)
+                    if not hasattr(fsm, '_prev_total_reps'):
+                        fsm._prev_total_reps = _cur_reps
 
-                    # 将 NN 结果附加到 FSM 状态写入前端
+                    # Read inference mode (pure_vision = skip GRU, vision_sensor = run GRU)
+                    _inference_mode = "pure_vision"
+                    try:
+                        _im_path = "/dev/shm/inference_mode.json"
+                        if os.path.exists(_im_path):
+                            with open(_im_path, "r") as _imf:
+                                _inference_mode = json.load(_imf).get("mode", "pure_vision")
+                    except Exception:
+                        pass
+
+                    nn_result = None
+                    if _cur_reps > fsm._prev_total_reps and _GRU_MODEL is not None and _inference_mode == "vision_sensor":
+                        # 一个动作刚完成！用积累的数据推理
+                        fsm._prev_total_reps = _cur_reps
+                        if len(_gru_feature_buf) >= _GRU_WINDOW_SIZE:
+                            try:
+                                window = np.array(_gru_feature_buf[-_GRU_WINDOW_SIZE:],
+                                                  dtype=np.float32)
+                                window[:, 1] /= 180.0
+                                window[:, 3] /= 100.0
+                                window[:, 4] /= 100.0
+                                window[:, 2]  = np.clip(window[:, 2] / 10.0, -1.0, 1.0)
+                                nn_result = _GRU_MODEL.infer(window)
+                                cls_cn = {"standard":"标准","compensating":"代偿","non_standard":"错误"}
+                                logging.info(f"🧠 [GRU] 第{_cur_reps}个动作判定: "
+                                             f"相似度={nn_result['similarity']:.3f} "
+                                             f"分类={cls_cn.get(nn_result['classification'], nn_result['classification'])} "
+                                             f"置信度={nn_result['confidence']:.3f}")
+                            except Exception as _e:
+                                logging.debug(f"[GRU] infer error: {_e}")
+
                     fsm.sync_to_frontend(angle, nn_result=nn_result)
                 # =================================================
 
             except (FileNotFoundError, json.JSONDecodeError):
                 pass
                 
-            # 动作类型热切换
+            # 动作类型热切换 (前端 user_profile + 语音 exercise_mode)
             try:
-                if os.path.exists("/dev/shm/user_profile.json"):
+                target_exercise = None
+                # 语音指令信号文件 (优先)
+                if os.path.exists("/dev/shm/exercise_mode.json"):
+                    with open("/dev/shm/exercise_mode.json", "r", encoding="utf-8") as ef:
+                        em_data = json.load(ef)
+                        mode = em_data.get("mode", "")
+                        if mode == "squat":
+                            target_exercise = "squat"
+                        elif mode == "curl":
+                            target_exercise = "bicep_curl"
+                    os.remove("/dev/shm/exercise_mode.json")
+                # 前端 user_profile
+                if target_exercise is None and os.path.exists("/dev/shm/user_profile.json"):
                     with open("/dev/shm/user_profile.json", "r", encoding="utf-8") as uf:
                         p_data = json.load(uf)
-                        exercise = p_data.get("exercise", "squat")
-                        if exercise != current_exercise:
-                            logging.info(f"🔄 动作模式切换: {current_exercise} -> {exercise}")
-                            current_exercise = exercise
-                            if exercise == "bicep_curl":
-                                fsm = DumbbellCurlFSM()
-                            else:
-                                fsm = SquatStateMachine()
-                            fsm.sync_to_frontend()
+                        target_exercise = p_data.get("exercise", "squat")
+                if target_exercise and target_exercise != current_exercise:
+                    logging.info(f"🔄 动作模式切换: {current_exercise} -> {target_exercise}")
+                    current_exercise = target_exercise
+                    if current_exercise == "bicep_curl":
+                        fsm = DumbbellCurlFSM()
+                    else:
+                        fsm = SquatStateMachine()
+                    fsm.sync_to_frontend()
+            except Exception:
+                pass
+
+            # 语音疲劳上限调整
+            try:
+                if os.path.exists("/dev/shm/fatigue_limit.json"):
+                    with open("/dev/shm/fatigue_limit.json", "r", encoding="utf-8") as fl:
+                        fl_data = json.load(fl)
+                        new_limit = fl_data.get("limit", 1500)
+                        logging.info(f"🎯 收到语音指令：疲劳上限改为 {new_limit}")
+                        # 更新全局疲劳阈值 (在 DeepSeek trigger 判定中使用)
+                        _fatigue_limit[0] = new_limit
+                    os.remove("/dev/shm/fatigue_limit.json")
             except Exception:
                 pass
 
@@ -619,9 +746,9 @@ async def main():
                 logging.info("🔄 收到前端重置信号，全轨数据已强制初始化零！")
                 continue
 
-            # DeepSeek trigger: manual OR fatigue auto-trigger at 1500
+            # DeepSeek trigger: manual OR fatigue auto-trigger at limit
             manual_trigger = os.path.exists("/dev/shm/trigger_deepseek")
-            fatigue_trigger = fsm.total_fatigue_volume >= 1500 and not _ds_lock[0]
+            fatigue_trigger = fsm.total_fatigue_volume >= _fatigue_limit[0] and not _ds_lock[0]
 
             # Cooldown: prevent rapid-fire auto-triggers after reset
             if fatigue_trigger and (time.time() - _last_deepseek_time) < 30:
@@ -647,7 +774,8 @@ async def main():
                 if connected:
                     rate_pct = round(good_count / (good_count + failed_count) * 100) if (good_count+failed_count) > 0 else 0
                     current_fatigue = fsm.total_fatigue_volume
-                    fatigue_str = f"1500满分！" if current_fatigue >= 1490 else f"{current_fatigue:.1f}/1500"
+                    fl = _fatigue_limit[0]
+                    fatigue_str = f"{fl}满分！" if current_fatigue >= fl - 10 else f"{current_fatigue:.1f}/{fl}"
                     
                     short_prompt = (
                         f"你是 IronBuddy 健身教练。\n"
@@ -659,7 +787,8 @@ async def main():
                         f"3.毒舌口语化，不要像机器人。控制在50字左右。\n"
                         f"4.绝对不要产生任何思维链推导（不要用<think>），第一句话直接给我最终的点评输出！"
                     )
-                    asyncio.create_task(_ds_wrapper(bridge, short_prompt, good_count, failed_count))
+                    if bridge is not None:
+                        asyncio.create_task(_ds_wrapper(bridge, short_prompt, good_count, failed_count))
 
                     # Auto-reset FSM after fatigue trigger
                     if fatigue_trigger:
@@ -671,7 +800,7 @@ async def main():
                         fsm.sync_to_frontend()
 
             # ===== 语音对话轮询 =====
-            if connected and not _chat_lock[0] and os.path.exists("/dev/shm/chat_input.txt"):
+            if connected and bridge is not None and not _chat_lock[0] and os.path.exists("/dev/shm/chat_input.txt"):
                 try:
                     mtime = os.path.getmtime("/dev/shm/chat_input.txt")
                     if mtime != _chat_mtime[0]:

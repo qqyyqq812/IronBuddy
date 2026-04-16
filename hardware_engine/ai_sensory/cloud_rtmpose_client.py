@@ -19,12 +19,21 @@ Environment variables
   CLOUD_JPEG_QUALITY  – JPEG upload quality (default 70)
   CLOUD_TIMEOUT_S     – per-request timeout in seconds (default 3.0)
   CLOUD_FALLBACK_NPU  – set to "0" to disable NPU fallback (default "1")
+  VISION_MODE         – "cloud" (default) or "local" for on-device YOLOv5 pose
+  LOCAL_POSE_MODEL    – path to .rknn model for local mode
+                        default: /home/toybrick/deploy_rknn_yolo/YOLOv5-Style/data/weights/pose-5s6-640-uint8.rknn
+  LOCAL_POSE_CONF     – confidence threshold for local model (default 0.35)
 
 Fallback
 ────────
 If the cloud endpoint becomes unreachable for more than CLOUD_TIMEOUT_S seconds,
 the client falls back to the local RKNN NPU (if available) and retries the cloud
 every 5 seconds until it comes back.
+
+Hot-switch
+──────────
+Write {"mode": "local"} or {"mode": "cloud"} to /dev/shm/vision_mode.json
+to switch vision mode at runtime without restarting.
 """
 
 import os
@@ -34,6 +43,7 @@ import json
 import math
 import threading
 from typing import Optional
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import cv2
 import numpy as np
@@ -42,6 +52,90 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# ── Embedded MJPEG Server (port 8080, zero-copy from memory) ─────────────────
+MJPEG_PORT = int(os.environ.get("MJPEG_PORT", "8080"))
+ENABLE_HDMI = os.environ.get("ENABLE_HDMI", "0") == "1"
+_hdmi_ok = [True]  # set to False if cv2.imshow fails
+
+_mjpeg_frame_lock = threading.Lock()
+_mjpeg_frame = [None]  # latest JPEG bytes, shared with MJPEG server
+
+
+class _MJPEGHandler(BaseHTTPRequestHandler):
+    """Minimal MJPEG handler — no logging, pure speed."""
+
+    def do_GET(self):
+        if self.path == '/stream' or self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=frame')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            try:
+                while True:
+                    with _mjpeg_frame_lock:
+                        jpeg = _mjpeg_frame[0]
+                    if jpeg is not None:
+                        self.wfile.write(b'--frame\r\n')
+                        self.wfile.write(b'Content-Type: image/jpeg\r\n')
+                        self.wfile.write(b'Content-Length: ' + str(len(jpeg)).encode() + b'\r\n\r\n')
+                        self.wfile.write(jpeg)
+                        self.wfile.write(b'\r\n')
+                    time.sleep(0.05)  # ~20fps cap
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        elif self.path == '/snapshot':
+            with _mjpeg_frame_lock:
+                jpeg = _mjpeg_frame[0]
+            if jpeg:
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(jpeg)))
+                self.send_header('Cache-Control', 'no-cache')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(jpeg)
+            else:
+                self.send_response(204)
+                self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass  # suppress all logging for performance
+
+
+class _ThreadedHTTPServer(HTTPServer):
+    """Handle each request in a new thread."""
+    daemon_threads = True
+    request_queue_size = 8
+
+    def process_request(self, request, client_address):
+        t = threading.Thread(target=self.process_request_thread, args=(request, client_address))
+        t.daemon = True
+        t.start()
+
+    def process_request_thread(self, request, client_address):
+        try:
+            self.finish_request(request, client_address)
+        except Exception:
+            pass
+        try:
+            self.shutdown_request(request)
+        except Exception:
+            pass
+
+
+def _start_mjpeg_server():
+    """Launch embedded MJPEG server on a daemon thread."""
+    try:
+        server = _ThreadedHTTPServer(('0.0.0.0', MJPEG_PORT), _MJPEGHandler)
+        print("[MJPEG] Embedded server on :{} (zero-copy, ~20fps)".format(MJPEG_PORT))
+        server.serve_forever()
+    except Exception as e:
+        print("[MJPEG] Server failed: {}".format(e))
 
 # ── Path bootstrap ─────────────────────────────────────────────────────────────
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +161,15 @@ FRAME_INTERVAL = 1.0 / TARGET_FPS
 USE_NPU_FALLBACK = os.environ.get("CLOUD_FALLBACK_NPU", "1") != "0"
 # Async mode: camera runs at full speed, cloud inference in background thread
 ASYNC_CLOUD = True
+
+# ── Local YOLOv5-Pose mode ───────────────────────────────────────────────────
+VISION_MODE = os.environ.get("VISION_MODE", "cloud").lower()  # "cloud" or "local"
+LOCAL_POSE_MODEL = os.environ.get(
+    "LOCAL_POSE_MODEL",
+    "/home/toybrick/deploy_rknn_yolo/YOLOv5-Style/data/weights/pose-5s6-640-uint8.rknn",
+)
+LOCAL_POSE_CONF = float(os.environ.get("LOCAL_POSE_CONF", "0.08"))
+SHM_VISION_MODE = "/dev/shm/vision_mode.json"
 
 SHM_POSE_JSON = "/dev/shm/pose_data.json" if os.path.exists("/dev/shm") else "/tmp/pose_data.json"
 SHM_RESULT_JPG = "/dev/shm/result.jpg" if os.path.exists("/dev/shm") else "/tmp/result.jpg"
@@ -130,11 +233,47 @@ def _write_result_jpg(frame: np.ndarray, kpts: list) -> None:
     ret, buf = cv2.imencode(".jpg", drawn, encode_param)
     if not ret:
         return
+    jpeg_bytes = buf.tobytes()
+
+    # Push to embedded MJPEG server (zero-copy from memory)
+    with _mjpeg_frame_lock:
+        _mjpeg_frame[0] = jpeg_bytes
+
+    # Also write to SHM file (for Flask fallback / snapshot)
     tmp = SHM_RESULT_JPG + ".tmp"
     try:
         with open(tmp, "wb") as f:
-            f.write(buf.tobytes())
+            f.write(jpeg_bytes)
         os.rename(tmp, SHM_RESULT_JPG)
+    except Exception:
+        pass
+
+    # HDMI direct display — fullscreen (if enabled and X11 available)
+    if ENABLE_HDMI and _hdmi_ok[0]:
+        try:
+            cv2.imshow("IronBuddy", drawn)
+            cv2.waitKey(1)
+        except Exception:
+            _hdmi_ok[0] = False
+            print("[CloudClient] HDMI display failed, disabling.")
+
+    # Write HDMI status for web frontend to read
+    _write_hdmi_status(ENABLE_HDMI and _hdmi_ok[0])
+
+
+_hdmi_status_counter = [0]
+
+def _write_hdmi_status(active):
+    """Write HDMI status to SHM (throttled to once per 30 frames)."""
+    _hdmi_status_counter[0] += 1
+    if _hdmi_status_counter[0] % 30 != 0:
+        return
+    try:
+        data = json.dumps({"active": bool(active), "ts": time.time()})
+        tmp = "/dev/shm/hdmi_status.json.tmp"
+        with open(tmp, "w") as f:
+            f.write(data)
+        os.rename(tmp, "/dev/shm/hdmi_status.json")
     except Exception:
         pass
 
@@ -242,13 +381,109 @@ class _NPUFallback:
             self._worker.release()
 
 
+# ── Hot-switch vision mode reader ─────────────────────────────────────────────
+def _read_vision_mode(default):
+    # type: (str) -> str
+    """Read current vision mode from signal file, falling back to default."""
+    try:
+        if os.path.exists(SHM_VISION_MODE):
+            with open(SHM_VISION_MODE, "r") as f:
+                data = json.load(f)
+            mode = data.get("mode", default).lower()
+            if mode in ("local", "cloud"):
+                return mode
+    except Exception:
+        pass
+    return default
+
+
+# ── Local YOLOv5 Pose engine (lazy init) ─────────────────────────────────────
+class _LocalPoseEngine(object):
+    """Wrapper around LocalYoloPose with lazy initialization."""
+
+    def __init__(self, model_path, conf_thresh):
+        self._model_path = model_path
+        self._conf_thresh = conf_thresh
+        self._engine = None
+        self._available = None  # type: Optional[bool]
+
+    def _try_init(self):
+        # type: () -> bool
+        if self._available is not None:
+            return self._available
+        try:
+            # Try both import paths (package install vs direct run)
+            try:
+                from hardware_engine.ai_sensory.local_yolo_pose import LocalYoloPose
+            except ImportError:
+                import importlib.util
+                _spec = importlib.util.spec_from_file_location(
+                    "local_yolo_pose",
+                    os.path.join(current_dir, "local_yolo_pose.py"),
+                )
+                _mod = importlib.util.module_from_spec(_spec)
+                _spec.loader.exec_module(_mod)
+                LocalYoloPose = _mod.LocalYoloPose
+            if os.path.exists(self._model_path):
+                self._engine = LocalYoloPose(self._model_path, conf_thresh=self._conf_thresh)
+                self._available = True
+                print("[CloudClient] Local YOLOv5-Pose engine ready: {}".format(self._model_path))
+            else:
+                print("[CloudClient] Local model not found: {}".format(self._model_path))
+                self._available = False
+        except Exception as e:
+            print("[CloudClient] Local YOLOv5-Pose init failed: {}".format(e))
+            self._available = False
+        return self._available
+
+    def infer(self, frame):
+        # type: (np.ndarray) -> list
+        """Returns [[x, y, conf], ...] x 17."""
+        if not self._try_init() or self._engine is None:
+            return [[0.0, 0.0, 0.0]] * 17
+        return self._engine.infer(frame)
+
+    def release(self):
+        if self._engine is not None:
+            self._engine.release()
+
+
 # ── Main client loop ───────────────────────────────────────────────────────────
 def main():
-    print("[CloudClient] IronBuddy Cloud RTMPose Client starting...")
-    print(f"[CloudClient] Endpoint : {CLOUD_INFER_URL}")
-    print(f"[CloudClient] Timeout  : {REQUEST_TIMEOUT}s")
-    print(f"[CloudClient] NPU fall : {USE_NPU_FALLBACK}")
-    print(f"[CloudClient] Async    : {ASYNC_CLOUD}")
+    print("[CloudClient] IronBuddy Vision Client starting...")
+    print("[CloudClient] Endpoint : {}".format(CLOUD_INFER_URL))
+    print("[CloudClient] Timeout  : {}s".format(REQUEST_TIMEOUT))
+    print("[CloudClient] NPU fall : {}".format(USE_NPU_FALLBACK))
+    print("[CloudClient] Async    : {}".format(ASYNC_CLOUD))
+    print("[CloudClient] VisionMode: {}".format(VISION_MODE))
+    print("[CloudClient] HDMI     : {}".format(ENABLE_HDMI))
+
+    # Test HDMI display availability (must check BEFORE cv2.imshow — Qt abort is uncatchable)
+    if ENABLE_HDMI:
+        display_env = os.environ.get("DISPLAY", "")
+        if not display_env:
+            print("[CloudClient] HDMI requested but $DISPLAY not set. Skipping HDMI.")
+            _hdmi_ok[0] = False
+        else:
+            # Quick X11 connectivity test
+            import subprocess as _sp
+            ret = _sp.call(["xdpyinfo"], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=3)
+            if ret != 0:
+                print("[CloudClient] HDMI: X11 display :{} not reachable. Skipping.".format(display_env))
+                _hdmi_ok[0] = False
+            else:
+                print("[CloudClient] HDMI display OK (DISPLAY={})".format(display_env))
+                # Create fullscreen window
+                cv2.namedWindow("IronBuddy", cv2.WINDOW_NORMAL)
+                cv2.setWindowProperty("IronBuddy", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                print("[CloudClient] HDMI fullscreen window created")
+
+    # Start embedded MJPEG server (independent of Flask)
+    mjpeg_thread = threading.Thread(target=_start_mjpeg_server, daemon=True)
+    mjpeg_thread.start()
+
+    # Current active mode (can be hot-switched via signal file)
+    active_mode = VISION_MODE
 
     # ── Load smoother (One-Euro, same params as publisher) ────────────────────
     try:
@@ -278,20 +513,23 @@ def main():
     # ── NPU fallback (initialised lazily) ─────────────────────────────────────
     npu = _NPUFallback() if USE_NPU_FALLBACK else None
 
-    # ── Async cloud inference state ───────────────────────────────────────────
-    # Shared between main thread and cloud thread
-    _latest_cloud_kpts = [None]  # latest keypoints from cloud
-    _cloud_frame_slot = [None]   # latest JPEG bytes for cloud to process
-    _cloud_lock = threading.Lock()
-    _cloud_alive = [True]
+    # ── Local YOLOv5-Pose engine (initialised lazily) ────────────────────────
+    local_pose = _LocalPoseEngine(LOCAL_POSE_MODEL, LOCAL_POSE_CONF)
+
+    # ── Async inference state ────────────────────────────────────────────────
+    _latest_kpts = [None]             # latest keypoints from ANY source
+    _cloud_jpeg_slot = [None]         # JPEG bytes for cloud thread
+    _local_frame_slot = [None]        # numpy frame for local thread
+    _infer_lock = threading.Lock()
+    _infer_alive = [True]
 
     def _cloud_worker():
-        """Background thread: picks up latest frame, sends to cloud, stores result."""
+        """Background thread: picks up latest JPEG, sends to cloud, stores result."""
         cloud_session = _make_session()
-        while _cloud_alive[0]:
-            with _cloud_lock:
-                jpeg = _cloud_frame_slot[0]
-                _cloud_frame_slot[0] = None  # consume
+        while _infer_alive[0]:
+            with _infer_lock:
+                jpeg = _cloud_jpeg_slot[0]
+                _cloud_jpeg_slot[0] = None
             if jpeg is None:
                 time.sleep(0.02)
                 continue
@@ -306,16 +544,36 @@ def main():
                     payload = resp.json()
                     kpts = payload.get("keypoints")
                     if kpts:
-                        with _cloud_lock:
-                            _latest_cloud_kpts[0] = kpts
+                        with _infer_lock:
+                            _latest_kpts[0] = kpts
             except Exception:
-                pass  # cloud unavailable, silently skip
+                pass
         cloud_session.close()
+
+    def _local_worker():
+        """Background thread: local NPU inference (non-blocking to main loop)."""
+        while _infer_alive[0]:
+            with _infer_lock:
+                raw_frame = _local_frame_slot[0]
+                _local_frame_slot[0] = None
+            if raw_frame is None:
+                time.sleep(0.02)
+                continue
+            # raw_frame here is the numpy BGR frame (not JPEG bytes)
+            kpts = local_pose.infer(raw_frame)
+            has_valid = any(k[2] > 0.1 for k in kpts)
+            if has_valid:
+                with _infer_lock:
+                    _latest_kpts[0] = kpts
 
     if ASYNC_CLOUD:
         cloud_thread = threading.Thread(target=_cloud_worker, daemon=True)
         cloud_thread.start()
         print("[CloudClient] Async cloud worker started.")
+
+    local_thread = threading.Thread(target=_local_worker, daemon=True)
+    local_thread.start()
+    print("[CloudClient] Async local NPU worker started.")
 
     seq_id = 0
     frame_idx = 0
@@ -339,7 +597,7 @@ def main():
             if simulate_mode:
                 time.sleep(0.05)
                 frame = np.zeros((480, 640, 3), dtype=np.uint8)
-                cv2.putText(frame, f"CloudClient Sim #{frame_idx}", (20, 40),
+                cv2.putText(frame, "CloudClient Sim #{}".format(frame_idx), (20, 40),
                             cv2.FONT_HERSHEY_DUPLEX, 0.8, (0, 200, 255), 2)
                 orig_h, orig_w = frame.shape[:2]
             else:
@@ -349,41 +607,64 @@ def main():
                     continue
                 orig_h, orig_w = frame.shape[:2]
 
+            # ── Hot-switch vision mode (check every 30 frames) ────────────
+            if frame_idx % 30 == 0:
+                new_mode = _read_vision_mode(active_mode)
+                if new_mode != active_mode:
+                    print("[CloudClient] Vision mode switched: {} -> {}".format(active_mode, new_mode))
+                    active_mode = new_mode
+
             # ── Encode JPEG for upload ─────────────────────────────────────
             ret_enc, buf = cv2.imencode(".jpg", frame, encode_param)
             if not ret_enc:
                 continue
             jpeg_bytes = buf.tobytes()
 
-            if ASYNC_CLOUD:
-                # ── Async mode: submit frame to cloud thread, use latest result ──
-                with _cloud_lock:
-                    _cloud_frame_slot[0] = jpeg_bytes  # always latest
-                    raw_kpts_list = _latest_cloud_kpts[0]  # may be None initially
-                used_cloud = raw_kpts_list is not None
-            else:
-                # ── Sync mode: block on each frame (original behavior) ────────
-                raw_kpts_list = None
-                used_cloud = False
-                try:
-                    resp = session.post(
-                        CLOUD_INFER_URL,
-                        files={"frame": ("frame.jpg", jpeg_bytes, "image/jpeg")},
-                        data={"seq_id": str(seq_id)},
-                        timeout=REQUEST_TIMEOUT,
-                    )
-                    if resp.status_code == 200:
-                        raw_kpts_list = resp.json().get("keypoints")
-                        used_cloud = True
-                except Exception:
-                    pass
+            raw_kpts_list = None
+            inference_src = "none"
 
-            # ── NPU fallback ──────────────────────────────────────────────
-            if raw_kpts_list is None:
-                if npu is not None and not simulate_mode:
-                    raw_kpts_list = npu.infer(frame, orig_w, orig_h)
+            if active_mode == "local":
+                # ── Async Local: submit frame to local thread, read latest ──
+                with _infer_lock:
+                    _local_frame_slot[0] = frame.copy()  # numpy frame for local NPU
+                    raw_kpts_list = _latest_kpts[0]      # latest result (may be None)
+                if raw_kpts_list is not None:
+                    inference_src = "local"
+            else:
+                # ── Async Cloud: submit JPEG to cloud thread, read latest ──
+                if ASYNC_CLOUD:
+                    with _infer_lock:
+                        _cloud_jpeg_slot[0] = jpeg_bytes  # cloud uses JPEG bytes
+                        raw_kpts_list = _latest_kpts[0]
                 else:
-                    raw_kpts_list = [[0.0, 0.0, 0.0]] * 17
+                    try:
+                        resp = session.post(
+                            CLOUD_INFER_URL,
+                            files={"frame": ("frame.jpg", jpeg_bytes, "image/jpeg")},
+                            data={"seq_id": str(seq_id)},
+                            timeout=REQUEST_TIMEOUT,
+                        )
+                        if resp.status_code == 200:
+                            raw_kpts_list = resp.json().get("keypoints")
+                    except Exception:
+                        pass
+
+                if raw_kpts_list is not None:
+                    inference_src = "cloud"
+
+                # ── NPU fallback (cloud mode only) ────────────────────────
+                if raw_kpts_list is None:
+                    if npu is not None and not simulate_mode:
+                        raw_kpts_list = npu.infer(frame, orig_w, orig_h)
+                        inference_src = "npu-fallback"
+                    else:
+                        raw_kpts_list = [[0.0, 0.0, 0.0]] * 17
+                        inference_src = "sim"
+
+            # ── Fallback: if no inference result yet, use zeros ────────────
+            if raw_kpts_list is None:
+                raw_kpts_list = [[0.0, 0.0, 0.0]] * 17
+                inference_src = "waiting"
 
             # ── Apply One-Euro smoother ───────────────────────────────────
             raw_kpts_np = np.array(raw_kpts_list, dtype=float)
@@ -419,18 +700,19 @@ def main():
 
             # ── Heartbeat ─────────────────────────────────────────────────
             if frame_idx % 60 == 0:
-                src = "cloud" if used_cloud else "NPU/sim"
-                print(f"[CloudClient] frame={frame_idx} src={src} seq={seq_id}")
+                print("[CloudClient] frame={} mode={} src={} seq={}".format(
+                    frame_idx, active_mode, inference_src, seq_id))
 
             seq_id += 1
 
     except KeyboardInterrupt:
         print("\n[CloudClient] Interrupted, shutting down.")
     finally:
-        _cloud_alive[0] = False
+        _infer_alive[0] = False
         cap.release()
         if npu:
             npu.release()
+        local_pose.release()
         session.close()
 
 
