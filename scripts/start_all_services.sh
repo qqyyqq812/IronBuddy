@@ -27,8 +27,11 @@ if [ -f "$ROOT/.api_config.json" ]; then
 fi
 export LLM_BACKEND=direct
 
-# 4. Audio reset (HDMI + speaker path)
-sudo -n amixer -c 0 cset numid=1,iface=MIXER,name='Playback Path' 6 >/dev/null 2>&1 || true
+# 4. Audio reset (板厂商标准: Main Mic 输入 + SPK 输出)
+# 关键: Capture MIC Path=1 (Main Mic板载) 否则 RMS=0 无法唤醒
+sudo -n amixer -c 0 cset numid=2,iface=MIXER,name='Capture MIC Path' 1 >/dev/null 2>&1 || true
+# Playback Path=2 (SPK=PH2.0 板载扬声器)
+sudo -n amixer -c 0 cset numid=1,iface=MIXER,name='Playback Path' 2 >/dev/null 2>&1 || true
 
 # 5. Launch helper: setsid+nohup+disown = true detach
 launch() {

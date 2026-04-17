@@ -2352,6 +2352,11 @@ syncWorker.onmessage = function(e) {
         _setText('statFailedLabel', isCurl ? '违规弯举' : '违规半蹲');
         _setText('hudAngleLabel', isCurl ? '肘关节角度' : '膝盖角度');
 
+        // Sprint5.3: 深蹲模式隐藏 EMG(纯视觉), 弯举模式显示 EMG(多模态)
+        // 后端代码不变, 仅前端按 exercise 切显示
+        var emgSec = document.getElementById('emgSection');
+        if (emgSec) emgSec.style.display = isCurl ? '' : 'none';
+
         // Sync exercise pills from FSM
         document.querySelectorAll('#exercisePills .pill-btn').forEach(b => {
             b.classList.toggle('active', b.getAttribute('data-ex') === d.exercise);

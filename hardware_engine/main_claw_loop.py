@@ -78,7 +78,7 @@ except Exception as e:
 
 
 class SquatStateMachine:
-    ANGLE_STANDARD = 110    # 调整：放宽深蹲判定阀值，低于 110° 即判定为合格
+    ANGLE_STANDARD = 100    # 必须下蹲到 100° 以内才算标准（用户要求 v5.3）
     TREND_WINDOW = 8       # 趋势检测滑窗大小
     IDLE_RANGE = 20        # 角度波动小于此值 = 静止
     IDLE_FRAMES = 25       # 连续多少帧稳定才切入 IDLE（~3s）
@@ -576,11 +576,10 @@ async def main():
             
             prompt = (
                 f"{_SOUL_TEXT[:500] + chr(10) + chr(10) if _SOUL_TEXT else ''}"
-                f"当前状态：用户刚才做了 {fsm.good_squats} 个标准深蹲，{fsm.failed_squats} 个半蹲（违规）。 "
-                f"当前积累的疲劳值为 {fsm.total_fatigue_volume:.1f} / 1500。"
-                f"请你结合该数据直接回答用户的问题。 "
-                f"口语化、简短直接（50字以内）。绝对不要包含任何你的内心思考过程（如<think>标签），直接给我最终的话语。"
-                f"用户说：{user_text}"
+                f"当前数据: 标准深蹲 {fsm.good_squats} 次, 违规 {fsm.failed_squats} 次, 疲劳 {fsm.total_fatigue_volume:.0f}/1500。"
+                f"结合数据客观回答, 用正式专业教练语气, 40字内。不说'你小子'、'老铁'、'行啊'等口语俚语。"
+                f"不要 <think> 标签。"
+                f"用户说: {user_text}"
             )
             reply = await bridge_ref.ask(prompt, timeout=60)
             if "</think>" in reply:
@@ -813,14 +812,13 @@ async def main():
                     fatigue_str = f"{fl}满分！" if current_fatigue >= fl - 10 else f"{current_fatigue:.1f}/{fl}"
                     
                     short_prompt = (
-                        f"你是 IronBuddy 健身教练。\n"
-                        f"本组运动真实数据：\n"
-                        f"- 当前肌肉疲劳累计达到：{fatigue_str}\n"
-                        f"- 标准深蹲: {good_count} 次，违规半蹲: {failed_count} 次（合格率 {rate_pct}%）\n"
-                        f"要求：1.纯一段文字，禁止换行/Markdown/Emoji。\n"
-                        f"2.若疲劳值满了就疯狂赞美；若疲劳值只有几百（比如做了几下就放弃），要无情嘲讽他半途而废。\n"
-                        f"3.毒舌口语化，不要像机器人。控制在50字左右。\n"
-                        f"4.绝对不要产生任何思维链推导（不要用<think>），第一句话直接给我最终的点评输出！"
+                        f"你是一名客观专业的健身教练。\n"
+                        f"本组数据: 疲劳 {fatigue_str}, 标准深蹲 {good_count} 次, 违规半蹲 {failed_count} 次, 合格率 {rate_pct}%\n"
+                        f"要求: 1.纯一段文字, 禁用换行/Markdown/Emoji/惊叹号。\n"
+                        f"2.语气正式专业, 类似教练书面点评。40字内。\n"
+                        f"3.**严禁**使用'你小子 老铁 兄弟 哥们 行啊 真行'等口语俚语或亲昵称谓。\n"
+                        f"4.按: 数据→问题→具体建议 的结构输出。\n"
+                        f"5.禁止 <think> 标签, 直接给最终点评。"
                     )
                     if bridge is not None:
                         asyncio.create_task(_ds_wrapper(bridge, short_prompt, good_count, failed_count))
