@@ -266,7 +266,7 @@ def chat_draft():
 
 @app.route('/api/mute', methods=['POST'])
 def api_mute():
-    """Write mute signal for voice daemon."""
+    """Mute/unmute: (1) write signal for voice daemon TTS gating, (2) hard-mute system Speaker via amixer."""
     try:
         data = request.get_json(force=True, silent=True) or {}
         muted = bool(data.get("muted", False))
@@ -276,6 +276,17 @@ def api_mute():
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(payload)
         os.rename(tmp_path, target_path)
+        # Hard-mute: amixer control Speaker channel directly (drops L0 alarms too)
+        try:
+            import subprocess
+            if muted:
+                subprocess.run(["sudo", "-n", "amixer", "-c", "0", "sset", "Speaker", "0%", "mute"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+            else:
+                subprocess.run(["sudo", "-n", "amixer", "-c", "0", "sset", "Speaker", "80%", "unmute"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        except Exception:
+            pass  # amixer may not have sudo NOPASSWD; voice daemon gating still works
         return Response(json.dumps({"ok": True, "muted": muted}), mimetype='application/json')
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),

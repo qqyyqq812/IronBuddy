@@ -330,7 +330,7 @@ class DumbbellCurlFSM:
         try:
             tmp = "/dev/shm/violation_alert.txt.tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                f.write("弯举不标准，请收缩到位")
+                f.write("不标准")
             os.rename(tmp, "/dev/shm/violation_alert.txt")
             logging.warning("🔊 弯举违规警报已发送到 voice_daemon")
         except Exception as e:

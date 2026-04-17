@@ -178,7 +178,8 @@ def record_with_vad(timeout=VAD_TIMEOUT):
 
     # VAD 阈值可通过 env 调节 (修复 baseline 虚高导致唤醒失败的问题)
     VAD_MIN = int(os.environ.get("VOICE_VAD_MIN", "250"))
-    VAD_DELTA = int(os.environ.get("VOICE_VAD_DELTA", "120"))
+    VAD_DELTA = int(os.environ.get("VOICE_VAD_DELTA", "40"))
+    VAD_DEBUG = os.environ.get("VOICE_VAD_DEBUG", "0") == "1"
     baseline = sum(noise_samples) / len(noise_samples) if noise_samples else 300
     threshold = max(VAD_MIN, baseline + VAD_DELTA)
     logging.info("VAD校准: baseline=%.0f threshold=%.0f (min=%d delta=%d)", baseline, threshold, VAD_MIN, VAD_DELTA)
@@ -198,11 +199,16 @@ def record_with_vad(timeout=VAD_TIMEOUT):
             arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)
             rms = float(np.sqrt(np.mean(np.square(arr))))
 
+            # Debug: 实时打印 RMS vs threshold
+            if VAD_DEBUG:
+                logging.info("[VAD_DBG] rms=%.0f thresh=%.0f started=%s", rms, threshold, started)
+
             if not started:
                 if rms > threshold:
                     started = True
                     audio_frames.extend(pre_roll)
                     audio_frames.append(data)
+                    logging.info("[VAD] 触发! rms=%.0f > thresh=%.0f", rms, threshold)
                 else:
                     pre_roll.append(data)
             else:
@@ -447,28 +453,40 @@ def main():
                     _deliver_to_fsm(remaining)
                 continue
 
-            # 无后续指令 — 提示说话
-            speak(client, "我在，请说", allow_interrupt=False)
-
-            # 等待用户说具体内容
+            # 无后续指令 — 提示说话后进入连续对话模式 (参考 main2.py ai_copilot_worker)
+            speak(client, "我在", allow_interrupt=False)
             try:
                 open("/dev/shm/chat_active", "w").close()
             except OSError:
                 pass
 
-            status2 = record_with_vad(timeout=VAD_TIMEOUT)
-            if status2 == "SUCCESS":
-                text2 = sound2text(client)
-                if text2 and len(text2) >= 2:
-                    logging.info("对话内容: %s", text2)
-                    # 先尝试系统命令
-                    if not _try_voice_command(client, text2):
+            # 连续对话循环: 持续听 3 轮, 每轮空录超时则退出回待机
+            _silence_rounds = 0
+            _MAX_SILENCE_ROUNDS = 3
+            while _silence_rounds < _MAX_SILENCE_ROUNDS:
+                status2 = record_with_vad(timeout=VAD_TIMEOUT)
+                if status2 == "SUCCESS":
+                    text2 = sound2text(client)
+                    if text2 and len(text2) >= 2:
+                        _silence_rounds = 0  # 重置静默计数
+                        logging.info("[对话] 用户: %s", text2)
+                        # 退出条件
+                        if any(w in text2 for w in ["再见", "退下", "结束对话"]):
+                            speak(client, "好的，有事再叫我")
+                            break
+                        # 先尝试系统命令 (切模式/静音/疲劳上限)
+                        if _try_voice_command(client, text2):
+                            continue
+                        # 常规对话 → 通过 chat_input.txt 走 FSM + DeepSeek 回复
                         _deliver_to_fsm(text2)
+                    else:
+                        _silence_rounds += 1
                 else:
-                    speak(client, "没听清，请再说一次")
-            else:
-                speak(client, "没有听到声音")
+                    _silence_rounds += 1
+                    if _silence_rounds < _MAX_SILENCE_ROUNDS:
+                        logging.info("[对话] 静默 %d/%d，继续监听", _silence_rounds, _MAX_SILENCE_ROUNDS)
 
+            logging.info("[对话] 连续 %d 轮无声，退回待机", _MAX_SILENCE_ROUNDS)
             try:
                 os.remove("/dev/shm/chat_active")
             except OSError:
