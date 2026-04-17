@@ -15,6 +15,17 @@ from cognitive.fusion_model import CompensationGRU, load_model, _compute_derived
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - [MAIN LOOP] - %(message)s')
 
+# ===== Sprint5: SQLite 持久化懒加载 =====
+_DB = [None]
+_DB_SESSION = [None]
+def _db():
+    if _DB[0] is not None: return _DB[0]
+    try:
+        from persistence.db import FitnessDB
+        d = FitnessDB(); d.connect(); _DB[0] = d; return d
+    except Exception as e:
+        logging.warning("[DB] init failed: %s", e); return None
+
 # ===== Agent 3 GRU 推理引擎 =====
 _GRU_MODEL = None  # type: CompensationGRU or None
 _GRU_WINDOW_SIZE = 30
@@ -108,7 +119,7 @@ class SquatStateMachine:
         try:
             tmp = "/dev/shm/violation_alert.txt.tmp"
             with open(tmp, "w", encoding="utf-8") as f:
-                f.write("动作不标准，请注意姿势")
+                f.write("不标准")
             os.rename(tmp, "/dev/shm/violation_alert.txt")
             logging.warning("🔊 违规警报已发送到 voice_daemon")
         except Exception as e:
@@ -539,6 +550,11 @@ async def main():
     
     current_exercise = "squat"
     fsm = SquatStateMachine()
+    # Sprint5: 开启首个训练 session
+    try:
+        _d = _db()
+        if _d is not None: _DB_SESSION[0] = _d.start_session(current_exercise)
+    except Exception as _e: logging.warning("[DB] session init skipped: %s", _e)
     _last_deepseek_time = time.time()
     _ds_lock = [False]
     _fatigue_limit = [1500]  # 可通过语音调整
@@ -661,6 +677,18 @@ async def main():
                     except Exception:
                         pass
 
+                    # Sprint5: 检测到 rep 变化 → 写入 DB（与 GRU 推理独立，不依赖模型）
+                    if _cur_reps > fsm._prev_total_reps:
+                        try:
+                            _d = _db()
+                            if _d is not None:
+                                _cur_good = getattr(fsm,'good_squats',0)
+                                _is_good = _cur_good > getattr(fsm,'_db_prev_good',0)
+                                fsm._db_prev_good = _cur_good
+                                _d.log_rep(_DB_SESSION[0], _is_good, getattr(fsm,'_min_angle_in_rep',0.0), target_emg, comp_emg)
+                        except Exception as _e: logging.warning("[DB] log_rep: %s", _e)
+                        fsm._prev_total_reps = _cur_reps  # 保证无 GRU 时也能推进
+
                     nn_result = None
                     if _cur_reps > fsm._prev_total_reps and _GRU_MODEL is not None and _inference_mode == "vision_sensor":
                         # 一个动作刚完成！用积累的数据推理
@@ -734,6 +762,13 @@ async def main():
             if os.path.exists("/dev/shm/fsm_reset_signal"):
                 try: os.remove("/dev/shm/fsm_reset_signal")
                 except OSError: pass
+                # Sprint5: 结算上个 session + 开启新 session
+                try:
+                    _d = _db()
+                    if _d is not None:
+                        _d.end_session(_DB_SESSION[0], fsm.good_squats, fsm.failed_squats, fsm.total_fatigue_volume)
+                        _DB_SESSION[0] = _d.start_session(current_exercise)
+                except Exception as _e: logging.warning("[DB] reset cycle: %s", _e)
                 # 最残暴的重置：直接将整个 FSM 脑叶切除再造，一劳永逸
                 if current_exercise == "bicep_curl":
                     fsm = DumbbellCurlFSM()
@@ -789,6 +824,10 @@ async def main():
                     )
                     if bridge is not None:
                         asyncio.create_task(_ds_wrapper(bridge, short_prompt, good_count, failed_count))
+                        try:
+                            _d = _db()
+                            if _d is not None: _d.log_llm(reason, short_prompt, "", 0, 0)
+                        except Exception as _e: logging.warning("[DB] log_llm: %s", _e)
 
                     # Auto-reset FSM after fatigue trigger
                     if fatigue_trigger:

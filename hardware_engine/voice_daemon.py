@@ -47,8 +47,8 @@ BAIDU_APP_ID = os.environ.get("BAIDU_APP_ID", "")
 BAIDU_API_KEY = os.environ.get("BAIDU_API_KEY", "")
 BAIDU_SECRET_KEY = os.environ.get("BAIDU_SECRET_KEY", "")
 
-DEVICE_REC = "hw:2,0"  # es7243 阵列麦克风 (card 2)
-DEVICE_SPK = "plughw:0,0"
+DEVICE_REC = os.environ.get("VOICE_FORCE_MIC", "hw:2,0")  # 默认 Webcam USB mic (card 2). env 可强制覆盖
+DEVICE_SPK = os.environ.get("VOICE_SPK", "plughw:0,0")
 REC_RATE = 44100       # 录音采样率 (硬件原始)
 ASR_RATE = 16000       # 百度ASR要求16kHz
 SILENCE_LIMIT = 1.2    # 停顿多久算说完 (秒)
@@ -67,6 +67,11 @@ _play_proc = None  # current aplay process
 # 违规警报监听
 VIOLATION_ALERT_FILE = "/dev/shm/violation_alert.txt"
 _violation_mtime = 0
+
+# T5 (参考 main2.py hard_alarm_worker): L0 级硬警报
+# 独立线程 + Event，违规警报立即 SIGKILL 正在播放的 aplay 并强制播放 (无视静音)
+_violation_event = threading.Event()
+_violation_text_latest = [""]  # mutable holder for thread communication
 
 
 # ===== 百度 AipSpeech 初始化 =====
@@ -171,9 +176,12 @@ def record_with_vad(timeout=VAD_TIMEOUT):
             rms = float(np.sqrt(np.mean(np.square(arr))))
             noise_samples.append(rms)
 
+    # VAD 阈值可通过 env 调节 (修复 baseline 虚高导致唤醒失败的问题)
+    VAD_MIN = int(os.environ.get("VOICE_VAD_MIN", "250"))
+    VAD_DELTA = int(os.environ.get("VOICE_VAD_DELTA", "120"))
     baseline = sum(noise_samples) / len(noise_samples) if noise_samples else 300
-    threshold = max(400, baseline + 250)
-    logging.info("VAD校准: baseline=%.0f threshold=%.0f (%d samples)", baseline, threshold, len(noise_samples))
+    threshold = max(VAD_MIN, baseline + VAD_DELTA)
+    logging.info("VAD校准: baseline=%.0f threshold=%.0f (min=%d delta=%d)", baseline, threshold, VAD_MIN, VAD_DELTA)
 
     output_path = "/tmp/voice_record.wav"
 
@@ -300,30 +308,43 @@ def main():
             time.sleep(30)
 
     # === 麦克风自测 ===
-    logging.info("麦克风自测: 录制1秒...")
-    test_ok = False
-    for dev in [DEVICE_REC, "hw:3,0", "hw:0,0"]:
-        try:
-            ret = subprocess.run(
-                ["sudo", "arecord", "-D" + dev, "-r%d" % REC_RATE,
-                 "-f", "S16_LE", "-c", "2", "-d", "1", "-q", "/tmp/mic_test.wav"],
-                timeout=5, capture_output=True)
-            sz = os.path.getsize("/tmp/mic_test.wav") if os.path.exists("/tmp/mic_test.wav") else 0
-            if ret.returncode == 0 and sz > 1000:
-                logging.info("麦克风自测通过: %s (录制 %d bytes)", dev, sz)
-                if dev != DEVICE_REC:
-                    logging.info("切换录音设备: %s → %s", DEVICE_REC, dev)
-                    globals()['DEVICE_REC'] = dev
-                test_ok = True
-                break
-            else:
-                logging.warning("设备 %s 录音失败 (exit=%d, size=%d)", dev, ret.returncode, sz)
-        except Exception as e:
-            logging.warning("设备 %s 测试异常: %s", dev, e)
+    # 若 env 强制指定麦克风则跳过自测（修复 hw:2,0 exit=1 但 size=176KB 的误判 bug）
+    if os.environ.get("VOICE_FORCE_MIC"):
+        logging.info("VOICE_FORCE_MIC=%s: 跳过麦克风自测，强信任", DEVICE_REC)
+        test_ok = True
+    else:
+        logging.info("麦克风自测: 录制1秒...")
+        test_ok = False
+        for dev in [DEVICE_REC, "hw:3,0", "hw:0,0"]:
+            try:
+                ret = subprocess.run(
+                    ["sudo", "arecord", "-D" + dev, "-r%d" % REC_RATE,
+                     "-f", "S16_LE", "-c", "2", "-d", "1", "-q", "/tmp/mic_test.wav"],
+                    timeout=5, capture_output=True)
+                sz = os.path.getsize("/tmp/mic_test.wav") if os.path.exists("/tmp/mic_test.wav") else 0
+                # 宽松判据: size > 1000 即视为成功 (arecord 可能 exit=1 但数据录到了)
+                if sz > 1000:
+                    logging.info("麦克风自测通过: %s (录制 %d bytes, exit=%d)", dev, sz, ret.returncode)
+                    if dev != DEVICE_REC:
+                        logging.info("切换录音设备: %s → %s", DEVICE_REC, dev)
+                        globals()['DEVICE_REC'] = dev
+                    test_ok = True
+                    break
+                else:
+                    logging.warning("设备 %s 录音失败 (exit=%d, size=%d)", dev, ret.returncode, sz)
+            except Exception as e:
+                logging.warning("设备 %s 测试异常: %s", dev, e)
 
-    if not test_ok:
-        logging.error("所有麦克风设备测试失败！语音功能不可用")
-        output_debug(0, "麦克风离线")
+        if not test_ok:
+            logging.error("所有麦克风设备测试失败！语音功能不可用")
+            output_debug(0, "麦克风离线")
+
+    # T5: L0 硬警报线程 (参考 main2.py hard_alarm_worker)
+    try:
+        _alarm_thread = threading.Thread(target=hard_alarm_worker, args=(client,), daemon=True)
+        _alarm_thread.start()
+    except Exception as e:
+        logging.error("L0 警报线程启动失败: %s", e)
 
     # 开机音效
     speak(client, "教练已上线，随时准备指导", allow_interrupt=False)
@@ -332,7 +353,7 @@ def main():
     llm_reply_mtime = 0
 
     while True:
-        # === 监听违规警报 (Task 5) ===
+        # === 监听违规警报 (T5: 分派给 L0 hard_alarm 线程，零延迟 SIGKILL 抢占) ===
         try:
             if os.path.exists(VIOLATION_ALERT_FILE):
                 ts = os.path.getmtime(VIOLATION_ALERT_FILE)
@@ -341,8 +362,9 @@ def main():
                     with open(VIOLATION_ALERT_FILE, "r", encoding="utf-8") as f:
                         alert_text = f.read().strip()
                     if alert_text:
-                        logging.info("违规警报播报: %s", alert_text)
-                        speak(client, alert_text, allow_interrupt=True)
+                        logging.info("违规警报 → L0 线程: %s", alert_text)
+                        _violation_text_latest[0] = alert_text
+                        _violation_event.set()
         except Exception:
             pass
 
@@ -451,6 +473,38 @@ def main():
                 os.remove("/dev/shm/chat_active")
             except OSError:
                 pass
+
+
+def hard_alarm_worker(client):
+    # type: (object) -> None
+    """T5 · L0 级硬警报独立线程 (参考 main2.py hard_alarm_worker)
+
+    主循环检测到 violation_alert.txt 更新 → 设置 _violation_event + 填 latest text
+    本线程响应 Event: SIGKILL 任何正在播的 aplay → 写 voice_interrupt → 播放警报
+    - 无视 _is_muted (与 main_claw_loop 的违规信号语义一致)
+    - allow_interrupt=False (警报播放中不被次级请求打断)
+    - 守护线程 (daemon=True)，主进程退出时自动终止
+    """
+    logging.info("[hard_alarm] L0 警报线程启动")
+    while True:
+        if _violation_event.wait(timeout=0.5):
+            _violation_event.clear()
+            text = _violation_text_latest[0]
+            if not text:
+                continue
+            logging.info("[hard_alarm] 触发 L0 警报: %s", text)
+            # 1) 立即 SIGKILL 任何正在播放的 aplay (抢占主循环 speak)
+            subprocess.run(["killall", "-9", "aplay"], stderr=subprocess.DEVNULL)
+            # 2) 通知主循环的 play_audio 循环: 其 aplay 已被杀
+            try:
+                open("/dev/shm/voice_interrupt", "w").close()
+            except OSError:
+                pass
+            # 3) 强制播放警报 (allow_interrupt=False: 警报播完前不被新请求截断)
+            try:
+                speak(client, text, allow_interrupt=False)
+            except Exception as e:
+                logging.error("[hard_alarm] speak 失败: %s", e)
 
 
 def _deliver_to_fsm(text):

@@ -34,6 +34,11 @@ Thumbs.db
 .env.local
 *.key
 
+# Sprint5 SQLite 持久化（不入仓）
+data/ironbuddy.db
+data/ironbuddy.db-wal
+data/ironbuddy.db-shm
+
 # === V3.0 专项竞技封锁区 ===
 models/
 backups/

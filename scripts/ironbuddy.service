@@ -1,0 +1,21 @@
+[Unit]
+Description=IronBuddy V3 edge AI fitness coach (5-service stack)
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=toybrick
+Group=toybrick
+WorkingDirectory=/home/toybrick/streamer_v3
+ExecStart=/home/toybrick/streamer_v3/scripts/start_all_services.sh
+ExecStop=/home/toybrick/streamer_v3/scripts/stop_all_services.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=15
+StandardOutput=append:/tmp/ironbuddy_systemd.log
+StandardError=append:/tmp/ironbuddy_systemd.log
+
+[Install]
+WantedBy=multi-user.target

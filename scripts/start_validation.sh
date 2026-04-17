@@ -1,15 +1,15 @@
 #!/bin/bash
-# IronBuddy V3.0 one-click start
+# IronBuddy V3.0 one-click start (WSL side: rsync + trigger board-side launcher)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TARGET="toybrick@10.105.245.224"
 BOARD_KEY="$HOME/.ssh/id_rsa_toybrick"
 CLOUD_KEY="$HOME/.ssh/id_cloud_autodl"
 CLOUD_SSH="root@connect.westd.seetacloud.com"
 CLOUD_PORT=14191
-# AutoDL direct HTTPS (no SSH tunnel needed!)
-CLOUD_RTMPOSE_URL="https://u953119-ba4a-9dcd6a47.westd.seetacloud.com:8443/infer"
+CLOUD_RTMPOSE_URL="${CLOUD_RTMPOSE_URL:-https://u953119-ba4a-9dcd6a47.westd.seetacloud.com:8443/infer}"
 
 # [1/3] Keys + cloud check
 echo "[1/3] setup..."
@@ -36,50 +36,22 @@ rsync -az --checksum -e "ssh -i $BOARD_KEY -o StrictHostKeyChecking=no" \
     --exclude='.git' --exclude='*.tar.gz' --exclude='*.rar' \
     --exclude='docs/hardware_ref' --exclude='backups' --exclude='.agent_memory' \
     --exclude='data' \
-    "$SCRIPT_DIR/" $TARGET:/home/toybrick/streamer_v3/ > /dev/null 2>&1
+    "$PROJECT_DIR/" $TARGET:/home/toybrick/streamer_v3/ > /dev/null 2>&1
 # 确保模型文件强制同步（rsync可能因大小相同跳过）
-if [ -f "$SCRIPT_DIR/models/extreme_fusion_gru.pt" ]; then
+if [ -f "$PROJECT_DIR/models/extreme_fusion_gru.pt" ]; then
     scp -i "$BOARD_KEY" -o StrictHostKeyChecking=no \
-        "$SCRIPT_DIR/models/extreme_fusion_gru.pt" \
+        "$PROJECT_DIR/models/extreme_fusion_gru.pt" \
         $TARGET:/home/toybrick/streamer_v3/hardware_engine/cognitive/extreme_fusion_gru.pt > /dev/null 2>&1
 fi
 
-# [3/3] Start board (direct HTTPS, no SSH tunnel!)
-echo "[3/3] starting..."
-ssh -i "$BOARD_KEY" -o StrictHostKeyChecking=no $TARGET "bash -s -- '$CLOUD_RTMPOSE_URL'" <<'BOARD'
-CLOUD_URL=$1
-echo toybrick | sudo -S killall -9 python3 2>/dev/null
-pkill -f "ssh.*-L.*6006" 2>/dev/null
-sleep 1
-rm -f /tmp/ironbuddy_*.pid
-sudo rm -f /dev/shm/*.json /dev/shm/*.txt /dev/shm/result.jpg /dev/shm/emg_heartbeat 2>/dev/null
-
-cd /home/toybrick/streamer_v3
-WSL_IP=$(echo $SSH_CLIENT | awk '{print $1}')
-
-echo "  -> [1/5] vision (Cloud GPU direct HTTPS)"
-nohup env CLOUD_RTMPOSE_URL="$CLOUD_URL" python3 -u hardware_engine/ai_sensory/cloud_rtmpose_client.py > /tmp/npu_main.log 2>&1 &
-echo $! > /tmp/ironbuddy_vision.pid
-sleep 3
-
-echo "  -> [2/5] streamer"
-nohup python3 streamer_app.py > /tmp/streamer.log 2>&1 &
-echo $! > /tmp/ironbuddy_streamer.pid
-
-echo "  -> [3/5] FSM"
-nohup env OPENCLAW_URL="ws://${WSL_IP}:18789" python3 hardware_engine/main_claw_loop.py > /tmp/main_loop.log 2>&1 &
-echo $! > /tmp/ironbuddy_mainloop.pid
-
-echo "  -> [4/5] EMG"
-nohup python3 hardware_engine/sensor/udp_emg_server.py > /tmp/udp_emg.log 2>&1 &
-echo $! > /tmp/ironbuddy_emg.pid
-
-echo "  -> [5/5] voice"
-nohup python3 hardware_engine/voice_daemon.py > /tmp/voice_daemon.log 2>&1 &
-echo $! > /tmp/ironbuddy_voice.pid
-
-echo "  -> done"
-BOARD
+# [3/3] Delegate launch to board-side script
+echo "[3/3] starting board..."
+ssh -i "$BOARD_KEY" -o StrictHostKeyChecking=no $TARGET \
+    "chmod +x /home/toybrick/streamer_v3/scripts/start_all_services.sh /home/toybrick/streamer_v3/scripts/stop_all_services.sh 2>/dev/null; \
+     export CLOUD_RTMPOSE_URL='$CLOUD_RTMPOSE_URL'; \
+     bash /home/toybrick/streamer_v3/scripts/start_all_services.sh" || {
+    echo "WARN: remote launcher returned non-zero; check /tmp/ironbuddy_startup.log on board"
+}
 
 echo ""
 echo "==========================================================="

@@ -114,14 +114,34 @@ def video_feed():
 
 @app.route('/state_feed')
 def state_feed():
-    """FSM 深蹲状态（JSON）"""
+    """FSM 深蹲状态（JSON）— 附加式合并 mute / fatigue_limit 字段（T2 voice UI）"""
+    base = {"state": "NO_PERSON", "good": 0, "failed": 0, "angle": 0}
     try:
         if os.path.exists("/dev/shm/fsm_state.json"):
             with open("/dev/shm/fsm_state.json", "r") as f:
-                return Response(f.read(), mimetype='application/json')
+                base = json.loads(f.read())
     except Exception:
         pass
-    return Response('{"state":"NO_PERSON","good":0,"failed":0,"angle":0}', mimetype='application/json')
+    # Merge mute state from voice daemon
+    try:
+        if os.path.exists("/dev/shm/mute_signal.json"):
+            with open("/dev/shm/mute_signal.json", "r") as f:
+                mute_data = json.loads(f.read())
+                base["muted"] = bool(mute_data.get("muted", False))
+    except Exception:
+        pass
+    if "muted" not in base:
+        base["muted"] = False
+    # Merge current fatigue limit (UI-set, persisted to /dev/shm/ui_fatigue_limit.json)
+    try:
+        if os.path.exists("/dev/shm/ui_fatigue_limit.json"):
+            with open("/dev/shm/ui_fatigue_limit.json", "r") as f:
+                base["fatigue_limit"] = int(json.loads(f.read()).get("limit", 1500))
+        else:
+            base["fatigue_limit"] = 1500
+    except Exception:
+        base["fatigue_limit"] = 1500
+    return Response(json.dumps(base, ensure_ascii=False), mimetype='application/json')
 
 
 @app.route('/llm_reply_feed')
@@ -257,6 +277,103 @@ def api_mute():
             f.write(payload)
         os.rename(tmp_path, target_path)
         return Response(json.dumps({"ok": True, "muted": muted}), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/fatigue_limit', methods=['POST'])
+def api_fatigue_limit():
+    """Set fatigue limit (T2): write actuation signal for FSM + persist display value for UI."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        limit = int(data.get("limit", 1500))
+        if limit < 100 or limit > 10000:
+            return Response(json.dumps({"ok": False, "error": "limit out of range (100-10000)"}),
+                            mimetype='application/json', status=400)
+        ts = time.time()
+        # 1) Actuation signal: FSM consumes + deletes
+        act_payload = json.dumps({"limit": limit, "ts": ts})
+        act_tmp = "/dev/shm/fatigue_limit.json.tmp"
+        act_target = "/dev/shm/fatigue_limit.json"
+        with open(act_tmp, "w", encoding="utf-8") as f:
+            f.write(act_payload)
+        os.rename(act_tmp, act_target)
+        # 2) Display signal: UI reads for current-value display (FSM doesn't touch this one)
+        ui_tmp = "/dev/shm/ui_fatigue_limit.json.tmp"
+        ui_target = "/dev/shm/ui_fatigue_limit.json"
+        with open(ui_tmp, "w", encoding="utf-8") as f:
+            f.write(act_payload)
+        os.rename(ui_tmp, ui_target)
+        return Response(json.dumps({"ok": True, "limit": limit}), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/exercise_mode', methods=['POST'])
+def api_exercise_mode():
+    """Switch exercise mode (T2): write signal for FSM to hot-swap squat↔curl."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        mode = data.get("mode", "squat")
+        if mode not in ("squat", "curl", "bicep_curl"):
+            return Response(json.dumps({"ok": False, "error": "invalid mode"}),
+                            mimetype='application/json', status=400)
+        # Normalize: FSM/voice daemon use "squat" or "curl"
+        norm_mode = "curl" if mode in ("curl", "bicep_curl") else "squat"
+        payload = json.dumps({"mode": norm_mode, "ts": time.time()})
+        tmp_path = "/dev/shm/exercise_mode.json.tmp"
+        target_path = "/dev/shm/exercise_mode.json"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.rename(tmp_path, target_path)
+        return Response(json.dumps({"ok": True, "mode": norm_mode}), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/mvc_calibration', methods=['GET', 'POST'])
+def api_mvc_calibration():
+    """MVC 标定 (T3, plan §3.3):
+    - GET: 读取当前 /dev/shm/emg_calibration.json, 返回状态
+    - POST: 写入新标定（板未连时 peak_mvc 值可为 null, 仅记录 protocol + 动作 + 时间戳）
+    契约参照 plan §2.1: {peak_mvc:{ch0,ch1}, protocol:'SENIAM-2000', exercise:'curl|squat', std_pct, ts}
+    """
+    target_path = "/dev/shm/emg_calibration.json"
+    if request.method == 'GET':
+        try:
+            if os.path.exists(target_path):
+                with open(target_path, "r", encoding="utf-8") as f:
+                    return Response(f.read(), mimetype='application/json')
+        except Exception:
+            pass
+        return Response(json.dumps({"calibrated": False}), mimetype='application/json')
+    # POST
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        exercise = data.get("exercise", "squat")
+        if exercise not in ("squat", "curl", "bicep_curl"):
+            return Response(json.dumps({"ok": False, "error": "invalid exercise"}),
+                            mimetype='application/json', status=400)
+        norm_ex = "curl" if exercise in ("curl", "bicep_curl") else "squat"
+        peak_mvc = data.get("peak_mvc", {"ch0": None, "ch1": None})
+        std_pct = data.get("std_pct", None)
+        payload = {
+            "calibrated": True,
+            "protocol": "SENIAM-2000",
+            "exercise": norm_ex,
+            "peak_mvc": peak_mvc,
+            "std_pct": std_pct,
+            "ts": time.time(),
+        }
+        tmp_path = target_path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.rename(tmp_path, target_path)
+        return Response(json.dumps({"ok": True, **payload}, ensure_ascii=False),
+                        mimetype='application/json')
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),
                         mimetype='application/json', status=500)
@@ -1028,6 +1145,39 @@ def admin_project_info():
         info["training_runs"] = tb_runs[-5:] if len(tb_runs) > 5 else tb_runs
 
     return Response(json.dumps(info, ensure_ascii=False), mimetype='application/json')
+
+
+# ===== SQLite 历史数据 API (Sprint 5 新增, 懒加载 & 失败安全) =====
+_db_singleton = [None]
+def _get_db():
+    if _db_singleton[0] is not None:
+        return _db_singleton[0]
+    try:
+        from hardware_engine.persistence.db import FitnessDB
+        _db = FitnessDB()
+        _db.connect()
+        _db_singleton[0] = _db
+        return _db
+    except Exception:
+        return None
+
+@app.route('/api/history/sessions')
+def api_history_sessions():
+    db = _get_db()
+    data = db.get_recent_sessions(limit=20) if db is not None else []
+    return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
+
+@app.route('/api/history/today')
+def api_history_today():
+    db = _get_db()
+    data = db.compute_daily_summary() if db is not None else {}
+    return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
+
+@app.route('/api/history/stats')
+def api_history_stats():
+    db = _get_db()
+    data = db.get_range_stats(days=7) if db is not None else []
+    return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
 
 
 if __name__ == '__main__':
