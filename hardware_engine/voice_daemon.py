@@ -455,8 +455,8 @@ class SpeechManager(object):
                 if ok:
                     self._play_proc[0] = self._launch_aplay("/tmp/voice_tts.wav")
                     self._wait_aplay(allow_interrupt, prio)
-                # V7.3: \u51b7\u5374\u7f29\u77ed\u5230 0.15s (\u539f 0.3s), \u64ad\u5b8c\u7acb\u523b\u5f00\u9ea6\u2014VAD baseline \u62a4\u680f\u5df2\u8db3\u591f\u6297\u6c61\u67d3
-                time.sleep(0.15)
+                # V7.3 + M6: 冷却 0.15s->0.05s (ALARM 播完尤其需要快速让 mic 回监听)
+                time.sleep(0.05 if prio == PRIO_ALARM else 0.15)
             except Exception as e:
                 logging.error(u"[SM] \u64ad\u653e\u5f02\u5e38: %s", e)
             finally:
@@ -481,9 +481,44 @@ class SpeechManager(object):
         p = self._play_proc[0]
         if p is None:
             return
+        # M6 (V7.13, 2026-04-20): 警报播报可被教练/对话状态掐断
+        # - voice_interrupt 文件 (FSM / UI / 主循环写入)
+        # - _dialog_active 被 set (主循环喊"教练"命中后立即 set)
+        # 非 ALARM 档保持原行为 (不可打断)
+        _alarm = (prio == PRIO_ALARM)
         while p.poll() is None:
-            # \u66f4\u9ad8\u4f18\u5148\u7ea7\u5165\u961f \u2192 enqueue() \u5df2\u7ecf\u8c03\u7528 _preempt_current
-            # \u8fd9\u91cc\u53ea\u9700\u7b49 poll \u7ed3\u675f\u5373\u53ef
+            if _alarm:
+                try:
+                    if os.path.exists("/dev/shm/voice_interrupt"):
+                        logging.info(u"[M6] ALARM 被 voice_interrupt 掐断")
+                        try:
+                            p.terminate()
+                        except Exception:
+                            pass
+                        try:
+                            subprocess.run(["killall", "-9", "aplay"],
+                                           stderr=subprocess.DEVNULL, timeout=1)
+                        except Exception:
+                            pass
+                        try:
+                            os.remove("/dev/shm/voice_interrupt")
+                        except OSError:
+                            pass
+                        break
+                    if _dialog_active.is_set():
+                        logging.info(u"[M6] ALARM 撞上对话状态, 立即掐断")
+                        try:
+                            p.terminate()
+                        except Exception:
+                            pass
+                        try:
+                            subprocess.run(["killall", "-9", "aplay"],
+                                           stderr=subprocess.DEVNULL, timeout=1)
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    pass
             time.sleep(0.05)
 
 
