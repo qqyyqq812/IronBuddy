@@ -58,3 +58,8 @@ docs/hardware_ref/
 streamer.log
 *.tmp
 tools/rknn-toolkit_source
+
+# V7.26: PPT 源文件不进仓库（GitHub 100MB 限制 + 全局规则）
+# PPT 演示稿按规范应去 /home/qq/docs/PPT/，不污染项目
+presentation/*.pptx
+presentation/**/*.pptx
