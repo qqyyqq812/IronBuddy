@@ -1332,9 +1332,15 @@ def main():
                 _route_text(_stripped)
                 logging.info(u"[\u5355\u8f6e] \u5524\u9192+\u6307\u4ee4\u5904\u7406\u5b8c, \u56de SLEEP")
             finally:
-                # M3: 等 TTS 回复真播完再退出对话状态 (最多 8s)
-                _wait_sm_idle(8.0)
+                # M11 (V7.17): 单轮顽疾修复 - 立即掐断录音 + 快速回 SLEEP
+                #   - killall -9 arecord 保证无残留录音 (防 "长对话" 错觉)
+                #   - _wait_sm_idle 8.0s -> 3.0s (够短硬编码回复播完)
+                #   - 下一轮必须重新喊"教练"才会响应
+                subprocess.run(["killall", "-9", "arecord"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                _wait_sm_idle(3.0)
                 _dialog_exit()
+                logging.info(u"[\u5355\u8f6e M11] \u5f55\u97f3\u5df2\u6389\uff0c\u5fc5\u987b\u91cd\u65b0\u5589\u6559\u7ec3")
             continue
 
         # V7.3: \u7f29\u77ed ACK \u964d\u4f4e\u5ef6\u8fdf \u2014 "\u55ef" (0.3s TTS) \u66ff\u4ee3 "\u6211\u5728" (1.5s TTS)
@@ -1371,10 +1377,12 @@ def main():
             os.remove("/dev/shm/chat_active")
         except OSError:
             pass
-        # M3: 等 TTS 回复播完再退出对话状态, 避免警报插入
-        _wait_sm_idle(8.0)
+        # M11 (V7.17): 单轮顽疾修复 - 同上, 强制掐断录音 + 快速回 SLEEP
+        subprocess.run(["killall", "-9", "arecord"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _wait_sm_idle(3.0)
         _dialog_exit()
-        logging.info(u"[\u5355\u8f6e] \u5b8c\u6210, \u56de SLEEP")
+        logging.info(u"[\u5355\u8f6e M11] \u5b8c\u6210, \u5f55\u97f3\u5df2\u6389\uff0c\u5fc5\u987b\u91cd\u65b0\u5589\u6559\u7ec3")
 
 
 def hard_alarm_worker(client):
@@ -1989,7 +1997,27 @@ def _try_voice_command(client, text):
             speak(client, u"\u5207\u6362\u7eaf\u89c6\u89c9\u5931\u8d25", allow_interrupt=False)
             logging.warning(u"\u547d\u4ee4: \u5207\u6362\u7eaf\u89c6\u89c9\u672a\u786e\u8ba4")
         return True
-    if any(w in text for w in [u"视觉加传感", u"视觉传感", u"传感模式", u"传感器模式", u"传感器", u"视觉感知"]):
+    # M11 (V7.17, 2026-04-20): 视觉+传感关键词大幅扩容, 容错 ASR 错识
+    # 实测错识变体: "视觉加权战" / "视觉加杠杆" / "视觉加感" (jiachuangan -> jiaquanzhan/jiagangang/jiagan)
+    # 策略: "视觉加" 后接任意内容 (默认纯视觉时,说"视觉加X"几乎必是想切传感)
+    #       + 各种"传感"同音近音
+    _SENSOR_KEYWORDS = [
+        # 精确词
+        u"视觉加传感", u"视觉传感", u"传感模式", u"传感器模式",
+        u"传感器", u"视觉感知", u"视觉加感知",
+        # "视觉加X" 泛匹配 (用户 demo 实录)
+        u"视觉加权", u"视觉加杠", u"视觉加感", u"视觉加肌",
+        u"视觉加杠杆", u"视觉加权战", u"视觉加岗", u"视觉加刚",
+        # 单独"加 X" 当传感意图
+        u"加传感", u"加杠杆", u"加权战", u"加肌电",
+        # 混合模式口语
+        u"混合模式", u"双模", u"一体化", u"融合模式", u"全模式",
+    ]
+    # "视觉加" 泛启发: 只要含"视觉加"且不是"视觉加纯"等 (纯视觉分支在上面已判)
+    _is_sensor_cmd = any(w in text for w in _SENSOR_KEYWORDS)
+    if not _is_sensor_cmd and u"视觉加" in text:
+        _is_sensor_cmd = True
+    if _is_sensor_cmd:
         _write_signal("/dev/shm/inference_mode.json", {"mode": "vision_sensor", "ts": time.time()})
         if _wait_mode_applied("inference", "vision_sensor", timeout=3.0):
             speak(client, u"\u5df2\u5207\u6362\u5230\u89c6\u89c9\u52a0\u4f20\u611f\u6a21\u5f0f", allow_interrupt=False)
@@ -2000,16 +2028,33 @@ def _try_voice_command(client, text):
         return True
 
     # 飞书智能代理: 规划、总结、提醒 分流
+    # M11 (V7.17): 扩容容错 — "推送"/"推到"系列 + "飞出/非书/菲书/腓书" 等飞书近音字
+    # 用户实录错识: "推送到非书平台" / "推送到飞出平台" / "就是飞出去的"
     push_type = None
-    if any(w in text for w in [u"总结", u"汇报", u"战报", u"飞书报告", u"飞书总结", u"生成报告"]):
+    speak_ack = None
+    # "飞书"的近音变体 (百度 ASR 经常把 feishu 切成同音字)
+    _FEISHU_SYNONYMS = (u"飞书", u"非书", u"飞出", u"非出", u"菲书", u"腓书",
+                        u"废书", u"飞输", u"非出去", u"飞出去", u"肥书")
+    _has_feishu = any(w in text for w in _FEISHU_SYNONYMS)
+    # "推送"系列 — 用户说"推送"99% 是想发飞书, 和细分意图解耦
+    _has_push = any(w in text for w in [u"推送", u"推到", u"推送到", u"发送到", u"发到", u"发给"])
+    # 训练相关 + 推送 → summary
+    _summary_keywords = [u"总结", u"汇报", u"战报", u"飞书报告", u"飞书总结",
+                         u"生成报告", u"训练结果", u"训练总结", u"训练报告",
+                         u"战况", u"成绩报告"]
+    if any(w in text for w in _summary_keywords) or (_has_push and not any(w in text for w in [u"警告", u"提醒", u"规划", u"计划"])):
         push_type = "summary"
         speak_ack = u"正在查阅历史并汇总战报，推送到飞书"
-    elif any(w in text for w in ["警告", "提醒", "超载", "报警"]):
+    elif any(w in text for w in [u"警告", u"提醒", u"超载", u"报警"]):
         push_type = "reminder"
-        speak_ack = "正在发送系统超载警示提醒通告"
-    elif any(w in text for w in ["规划", "计划", "发飞书", "发消息"]):
+        speak_ack = u"正在发送系统超载警示提醒通告"
+    elif any(w in text for w in [u"规划", u"计划", u"发飞书", u"发消息"]):
         push_type = "plan"
-        speak_ack = "正在调取长期记忆，生成专业规划推送飞书"
+        speak_ack = u"正在调取长期记忆，生成专业规划推送飞书"
+    # 仅含"飞书"近音而无具体意图 → 默认 summary
+    elif _has_feishu:
+        push_type = "summary"
+        speak_ack = u"收到，正在推送训练总结到飞书"
 
     if push_type:
         speak(client, speak_ack, allow_interrupt=False)
