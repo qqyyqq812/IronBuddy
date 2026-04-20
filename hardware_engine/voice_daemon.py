@@ -1073,6 +1073,29 @@ def main():
             logging.info(u"静音中, 仅响应解除静音: %s", text[:40])
             return True
 
+        # M5: 两句硬编码闲聊 (最高优先级, 压过所有过滤)
+        #      命中则替换 chat_input 为 canonical 原文, 直连 DeepSeek
+        _hc = _try_hardcode_chat(text)
+        if _hc:
+            logging.info(u"[M5] 硬编码命中, 用规范原文替换: %s -> %s", text[:30], _hc)
+            _publish_chat_input_raw(_hc)  # 覆盖为规范原文
+
+            def _async_hardcode_chat(canonical):
+                try:
+                    reply = _try_deepseek_chat(canonical)
+                    if reply:
+                        logging.info(u"[M5] DeepSeek 回复: %s", reply[:60])
+                        _publish_chat_reply(reply)
+                    else:
+                        logging.info(u"[M5] DeepSeek 失败")
+                        _speak_ack(u"网络有点慢")
+                except Exception as _ee:
+                    logging.error(u"[M5] DeepSeek 异常: %s", _ee)
+                    _speak_ack(u"网络有点慢")
+
+            threading.Thread(target=_async_hardcode_chat, args=(_hc,), daemon=True).start()
+            return True
+
         # 2) 乱识别栅栏 (文本已写气泡, 仅 TTS 回"没听清")
         if _is_gibberish(text):
             logging.info(u"[栅栏] 乱识别丢弃: %s", text[:40])
@@ -1306,6 +1329,51 @@ def _deliver_to_fsm(text):
         logging.info("投递到 FSM: %s", text)
     except Exception as e:
         logging.error("投递失败: %s", e)
+
+
+# ===== M5 (V7.13, 2026-04-20): 两句硬编码闲聊直通 =====
+# 用户需求: 只会问两个问题, ASR 识别到"近音"就强制显示硬编码原文 + 调 DeepSeek
+# 设计: 关键词集合 OR 拼音片段任一命中 -> 返回规范化原文, 绕过 A/B 路
+HARDCODE_CHATS = [
+    {
+        "canonical": u"请问现在几点了",
+        "keywords": (u"几点", u"现在几点", u"点钟", u"点了", u"时间", u"几点了"),
+        "pinyin_pats": (u"jidian", u"jidianl", u"jidian了", u"shijian", u"xianzaiji", u"dianle", u"dianzhong"),
+    },
+    {
+        "canonical": u"我的膝盖有疼痛感怎么办",
+        "keywords": (u"膝盖", u"膝", u"疼", u"痛", u"酸", u"怎么办"),
+        "pinyin_pats": (u"xigai", u"xigaiteng", u"xigaitong", u"tengtong", u"tongtong",
+                        u"xitong", u"xiteng", u"suantong", u"zenmeban"),
+    },
+]
+
+
+def _try_hardcode_chat(text):
+    # type: (str) -> str
+    """M5: 返回命中的 canonical 原文, 未命中返回空串.
+    匹配规则: 关键词任一 ∈ text OR 拼音片段任一 ∈ pinyin(text).
+    """
+    if not text:
+        return u""
+    try:
+        py = u"".join(_lazy_pinyin(text)) if _PINYIN_AVAILABLE else text.lower()
+    except Exception:
+        py = text.lower()
+    for entry in HARDCODE_CHATS:
+        # 关键词直接匹配
+        if any(kw in text for kw in entry["keywords"]):
+            logging.info(u"[M5_hardcode] 关键词命中 -> %s", entry["canonical"])
+            return entry["canonical"]
+        # 拼音片段匹配
+        for pat in entry["pinyin_pats"]:
+            # 拼音片段里的中文字符也要先转拼音
+            pat_py = u"".join(_lazy_pinyin(pat)) if _PINYIN_AVAILABLE and any(u'\u4e00' <= c <= u'\u9fff' for c in pat) else pat
+            if pat_py in py:
+                logging.info(u"[M5_hardcode] 拼音片段 '%s' in '%s' -> %s",
+                             pat_py, py[:30], entry["canonical"])
+                return entry["canonical"]
+    return u""
 
 
 def _publish_chat_input_raw(text):
