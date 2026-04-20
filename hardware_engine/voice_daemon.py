@@ -637,22 +637,25 @@ def _speak_llm(text, allow_interrupt=True):
 
 
 # ===== STT: arecord + VAD + 百度识别 =====
-def record_with_vad(timeout=VAD_TIMEOUT):
-    # type: (int) -> str
+# M2 (V7.13, 2026-04-20): baseline 缓存 + fast_start 模式, 唤醒后二次录音跳过噪声采样
+# 空白期 2.1s -> 0.6s. 单进程内存缓存, 30s 失效后重采
+_VAD_BASELINE_CACHE = {"baseline": 0.0, "ts": 0.0}
+_VAD_BASELINE_TTL = 30.0
+
+def record_with_vad(timeout=VAD_TIMEOUT, fast_start=False):
+    # type: (int, bool) -> str
     """
     录音，自适应VAD检测说话结束。
     返回: "SUCCESS" (录到了), "SILENCE" (没人说话), "INTERRUPTED"
+    M2: fast_start=True 时, 复用 30s 内的 baseline, 跳过 12 帧预采样.
     """
-    # V7.0: \u4e0d\u518d\u9700\u8981 audioop (\u76f4\u63a5 16k mono)
     import numpy as np
 
-    # V4.5 preflush: 清理僵尸 arecord (decisions.md 坑 10 教训)
-    # 长时间运行后板端可能留下僵尸 arecord 占用 PCM, 造成隐形锁死 (录音但无数据)
+    # V4.5 preflush: 清理僵尸 arecord
     subprocess.run(["killall", "-9", "arecord"],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    time.sleep(0.2)
+    time.sleep(0.05 if fast_start else 0.2)
 
-    # V7.0: \u76f4\u63a5\u5f55 16kHz mono S16_LE, \u4e0e\u767e\u5ea6 ASR \u539f\u751f\u683c\u5f0f\u5bf9\u9f50, \u65e0\u4efb\u4f55\u91cd\u91c7\u6837\u5931\u771f
     cmd = ["sudo", "arecord", "-D" + DEVICE_REC, "-r%d" % REC_RATE,
            "-f", "S16_LE", "-c", "1", "-q"]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -663,41 +666,49 @@ def record_with_vad(timeout=VAD_TIMEOUT):
     pre_roll = collections.deque(maxlen=15)
     start_time = time.time()
 
-    # V5.1 \u52a8\u6001\u566a\u58f0\u57fa\u7ebf\u6821\u51c6: \u4e22\u524d 4 \u5e27 (\u6b8b\u54cd) + \u53d6\u540e 8 \u5e27\u4e2d\u4f4d\u6570 (\u6297\u5c16\u9510\u6c61\u67d3)
-    # \u9884\u8f6c 200ms \u8ba9 ALSA PCM \u5e94\u7b54\u5230\u7a33\u6001
-    time.sleep(0.2)
-    noise_samples = []
-    # \u4e22\u5f03\u524d 4 \u5e27 \u2014 \u63a7\u5236\u5668\u72ec\u7acb\u5524\u9192/\u4e0a\u4e00\u8f6e\u5c3e\u97f3 pops
-    for _ in range(4):
-        _discard = proc.stdout.read(4096)
-    for _ in range(8):
-        data = proc.stdout.read(4096)
-        if data:
-            arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-            rms = float(np.sqrt(np.mean(np.square(arr))))
-            noise_samples.append(rms)
-
-    # VAD \u9608\u503c\u53ef\u901a\u8fc7 env \u8c03\u8282 (\u9ed8\u8ba4\u5bf9\u9f50\u540c\u5b66 main2.py \u5728 RK809 \u677f\u8f7d MIC \u7684\u5b9e\u6d4b: 600/400)
     VAD_MIN = int(os.environ.get("VOICE_VAD_MIN", "600"))
     VAD_DELTA = int(os.environ.get("VOICE_VAD_DELTA", "400"))
-    VAD_CAP = int(os.environ.get("VOICE_VAD_CAP", "1500"))  # V5.1 baseline \u4e0a\u9650\u62a4\u680f
+    VAD_CAP = int(os.environ.get("VOICE_VAD_CAP", "1500"))
     VAD_DEBUG = os.environ.get("VOICE_VAD_DEBUG", "0") == "1"
-    # V5.1 \u4e2d\u4f4d\u6570\u4ee3\u66ff\u5747\u503c: \u6297\u5355\u4e2a\u5c16\u9510\u6c61\u67d3\u6837\u672c
-    if noise_samples:
-        _sorted = sorted(noise_samples)
-        _mid = _sorted[len(_sorted) // 2]
-        baseline_raw = _mid
+
+    # M2: baseline 缓存决策
+    _cache_fresh = (time.time() - _VAD_BASELINE_CACHE["ts"]) < _VAD_BASELINE_TTL \
+                   and _VAD_BASELINE_CACHE["baseline"] > 0
+    if fast_start and _cache_fresh:
+        baseline = _VAD_BASELINE_CACHE["baseline"]
+        # fast_start 仍丢 1 帧 (128ms) 去唇音 pop
+        _discard = proc.stdout.read(4096)
+        logging.info(u"[VAD] fast_start 复用 baseline=%.0f (缓存龄%.1fs)",
+                     baseline, time.time() - _VAD_BASELINE_CACHE["ts"])
     else:
-        baseline_raw = 300
-    # V5.1 \u62a4\u680f: baseline \u8d85\u8fc7 VAD_CAP \u89c6\u4e3a\u5f02\u5e38\u6c61\u67d3, \u5f3a\u5236\u7528\u5148\u9a8c\u503c
-    if baseline_raw > VAD_CAP:
-        logging.warning(u"[VAD] baseline=%d \u5f02\u5e38\u504f\u9ad8(>%d), \u964d\u7ea7\u4e3a\u5148\u9a8c\u503c 500",
-                        int(baseline_raw), VAD_CAP)
-        baseline = 500.0
-    else:
-        baseline = baseline_raw
+        # 冷启动: 丢 2 帧 + 采 4 帧中位数 (较原 4+8 省 768ms)
+        time.sleep(0.1 if fast_start else 0.2)
+        noise_samples = []
+        for _ in range(2):
+            _discard = proc.stdout.read(4096)
+        for _ in range(4):
+            data = proc.stdout.read(4096)
+            if data:
+                arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)
+                rms = float(np.sqrt(np.mean(np.square(arr))))
+                noise_samples.append(rms)
+        if noise_samples:
+            _sorted = sorted(noise_samples)
+            baseline_raw = _sorted[len(_sorted) // 2]
+        else:
+            baseline_raw = 300
+        if baseline_raw > VAD_CAP:
+            logging.warning(u"[VAD] baseline=%d 异常偏高(>%d), 降级为先验值 500",
+                            int(baseline_raw), VAD_CAP)
+            baseline = 500.0
+        else:
+            baseline = baseline_raw
+        _VAD_BASELINE_CACHE["baseline"] = baseline
+        _VAD_BASELINE_CACHE["ts"] = time.time()
+
     threshold = max(VAD_MIN, baseline + VAD_DELTA)
-    logging.info("VAD校准: baseline=%.0f threshold=%.0f (min=%d delta=%d)", baseline, threshold, VAD_MIN, VAD_DELTA)
+    logging.info("VAD校准: baseline=%.0f threshold=%.0f (min=%d delta=%d fast=%s)",
+                 baseline, threshold, VAD_MIN, VAD_DELTA, fast_start)
 
     output_path = "/tmp/voice_record.wav"
 
@@ -1149,7 +1160,8 @@ def main():
         except OSError:
             pass
         _mic_allowed.wait()  # \u7b49 "\u6211\u5728" \u64ad\u5b8c
-        status2 = record_with_vad(timeout=VAD_TIMEOUT)
+        # M2: 唤醒后的二次录音用 fast_start (空白期 1.5s -> 0.2s)
+        status2 = record_with_vad(timeout=VAD_TIMEOUT, fast_start=True)
         if status2 == "SUCCESS":
             text2 = sound2text(client)
             if text2 and len(text2) >= 2:
