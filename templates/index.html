@@ -43,6 +43,41 @@
             --transition: 0.2s ease;
             --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
             --sidebar-width: 420px;
+
+            /* ==== V4.7 设计 Token 扩展（追加，不覆盖现有）==== */
+            /* 阴影梯度 */
+            --shadow-xs: 0 1px 2px rgba(0,0,0,0.3);
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.35);
+            --shadow-md: 0 4px 16px rgba(0,0,0,0.4);
+            --shadow-lg: 0 8px 32px rgba(0,0,0,0.45);
+            --glow-accent-sm: 0 0 8px var(--accent-glow);
+            --glow-accent-md: 0 0 16px var(--accent-glow);
+            --glow-accent-lg: 0 0 28px var(--accent-glow);
+            /* 间距梯度 */
+            --space-xs: 4px;
+            --space-sm: 8px;
+            --space-md: 12px;
+            --space-lg: 16px;
+            --space-xl: 24px;
+            --space-2xl: 32px;
+            /* 玻璃模糊 */
+            --glass-blur-sm: 8px;
+            --glass-blur-md: 12px;
+            --glass-blur-lg: 16px;
+            /* 过渡层级 */
+            --transition-fast: 0.1s ease;
+            --transition-slow: 0.4s cubic-bezier(0.16,1,0.3,1);
+            /* 字体 scale */
+            --text-xs: 11px;
+            --text-sm: 12px;
+            --text-base: 14px;
+            --text-lg: 16px;
+            --text-xl: 20px;
+            --text-2xl: 28px;
+            /* 语义色中间层 */
+            --accent-teal: #14b8a6;
+            --accent-sky: #38bdf8;
+            --accent-rose: #f43f5e;
         }
 
         body {
@@ -67,13 +102,15 @@
             padding: 0 20px;
             display: flex;
             align-items: center;
-            gap: 16px;
+            gap: var(--space-lg);
             border-bottom: 1px solid var(--border);
             background: var(--bg-glass-strong);
-            backdrop-filter: blur(16px);
+            backdrop-filter: blur(var(--glass-blur-lg));
             flex-shrink: 0;
             z-index: 100;
+            transition: border-color var(--transition-slow);
         }
+        .header:hover { border-bottom-color: var(--border-active); }
         .logo {
             display: flex;
             align-items: center;
@@ -98,7 +135,7 @@
         .header-controls {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: var(--space-sm);
             margin-left: auto;
         }
 
@@ -203,7 +240,7 @@
             display: flex;
             flex-direction: column;
             padding: 14px;
-            gap: 12px;
+            gap: var(--space-md);
             overflow-y: auto;
             min-width: 0;
         }
@@ -238,7 +275,7 @@
             border: 1px solid var(--border);
             background: #000;
             flex-shrink: 0;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            box-shadow: var(--shadow-lg);
         }
         .hdmi-placeholder {
             display: none;
@@ -273,7 +310,7 @@
             z-index: 5;
         }
         .hud-chip {
-            backdrop-filter: blur(14px);
+            backdrop-filter: blur(var(--glass-blur-md));
             background: rgba(0,0,0,0.6);
             border: 1px solid rgba(255,255,255,0.08);
             border-radius: var(--radius-sm);
@@ -300,21 +337,26 @@
         /* Stats grid */
         .stats-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-            gap: 10px;
+            grid-template-columns: repeat(5, 1fr);
+            gap: var(--space-sm);
         }
         .stat-card {
             background: var(--bg-surface);
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(var(--glass-blur-md));
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 14px;
+            padding: 10px 6px;
             text-align: center;
+            min-height: 90px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
             transition: border-color var(--transition), box-shadow var(--transition);
         }
         .stat-card:hover {
             border-color: var(--border-active);
-            box-shadow: 0 0 16px var(--accent-glow);
+            box-shadow: var(--glow-accent-md);
+            backdrop-filter: blur(var(--glass-blur-sm));
         }
         .stat-label {
             font-size: 0.65em;
@@ -389,7 +431,7 @@
             background: var(--bg-surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 12px;
+            padding: var(--space-md);
             display: flex;
             flex-direction: column;
         }
@@ -514,7 +556,7 @@
         }
         .emg-legend {
             display: flex;
-            gap: 12px;
+            gap: var(--space-md);
             justify-content: center;
             font-size: 0.64em;
             color: var(--text-muted);
@@ -536,7 +578,7 @@
         /* Action buttons */
         .action-row {
             display: flex;
-            gap: 8px;
+            gap: var(--space-sm);
         }
         .btn-action {
             flex: 1;
@@ -683,8 +725,8 @@
         .sidebar {
             width: var(--sidebar-width);
             border-left: 1px solid var(--border);
-            background: var(--bg-glass-strong);
-            backdrop-filter: blur(16px);
+            background: linear-gradient(180deg, var(--bg-deep) 0%, rgba(16,20,36,0.85) 100%);
+            backdrop-filter: blur(var(--glass-blur-lg));
             display: flex;
             flex-shrink: 0;
             transition: margin-right 0.3s ease, opacity 0.3s;
@@ -814,11 +856,38 @@
             color: var(--text-dim);
             font-family: var(--font-mono);
         }
+        /* Compact service chip used in the center panel under the skeleton */
+        .svc-mini {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 8px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            font-size: 0.72em;
+            overflow: hidden;
+        }
+        .svc-mini-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .svc-mini-dot.on { background: var(--accent-green); box-shadow: 0 0 5px var(--accent-green); }
+        .svc-mini-dot.off { background: var(--accent-red); box-shadow: 0 0 5px var(--accent-red); }
+        .svc-mini-dot.unknown { background: var(--text-dim); }
+        .svc-mini-name {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-1);
+        }
 
         /* Big action buttons */
         .big-btn {
             width: 100%;
-            padding: 12px;
+            padding: var(--space-md);
             border-radius: var(--radius-sm);
             font-family: inherit;
             font-size: 0.85em;
@@ -937,7 +1006,7 @@
         }
 
         /* Data browser */
-        .data-tree { margin-top: 8px; }
+        .data-tree { margin-top: var(--space-sm); }
         .tree-exercise {
             margin-bottom: 10px;
         }
@@ -1029,7 +1098,7 @@
             background: var(--bg-surface);
             border: 1px solid var(--border);
             border-radius: var(--radius-sm);
-            padding: 12px;
+            padding: var(--space-md);
             margin-top: 10px;
         }
         .model-card .mc-title {
@@ -1060,7 +1129,7 @@
             gap: 28px;
             border-top: 1px solid var(--border);
             background: var(--bg-glass-strong);
-            backdrop-filter: blur(12px);
+            backdrop-filter: blur(var(--glass-blur-md));
             font-size: 0.72em;
             flex-shrink: 0;
         }
@@ -1098,7 +1167,7 @@
             background: var(--bg-glass-strong);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 24px;
+            padding: var(--space-xl);
             width: 360px;
             backdrop-filter: blur(20px);
         }
@@ -1108,8 +1177,8 @@
         }
         .modal-actions {
             display: flex;
-            gap: 8px;
-            margin-top: 16px;
+            gap: var(--space-sm);
+            margin-top: var(--space-lg);
         }
         .modal-actions .btn-action { flex: 1; }
 
@@ -1156,6 +1225,252 @@
             }
             .status-bar { gap: 14px; font-size: 0.65em; }
         }
+
+        /* ===== V7.3 UI REFINEMENT ===== */
+        .header { position: relative; }
+
+        /* 顶部模式条：居中三段 segmented-bar，与底部 总标准/总违规/总代偿 对齐 */
+        .mode-segbar {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            align-items: stretch;
+            background: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            overflow: hidden;
+            backdrop-filter: blur(var(--glass-blur-sm));
+            box-shadow: var(--shadow-xs);
+            pointer-events: none;
+        }
+        .mode-segbar .seg {
+            padding: 6px 18px;
+            font-size: 0.7em;
+            font-weight: 600;
+            color: var(--text-muted);
+            letter-spacing: 0.4px;
+            position: relative;
+            white-space: nowrap;
+            display: inline-flex;
+            align-items: center;
+            border-right: 1px solid var(--border);
+        }
+        .mode-segbar .seg:last-child { border-right: none; }
+        .mode-segbar .seg.active { color: var(--accent); }
+        .mode-segbar .seg.active::after {
+            content: '';
+            position: absolute;
+            left: 14px; right: 14px; bottom: 3px;
+            height: 1.5px;
+            background: var(--accent);
+            border-radius: 1px;
+        }
+
+        /* 中柱：骨架展示舱 —— 展示屏质感，占满整列，去荧光化 */
+        .center-panel.kin-col {
+            flex: 0 0 260px;
+            padding: 14px 12px 16px;
+            gap: 10px;
+        }
+        .kin-title {
+            font-size: 0.58em;
+            letter-spacing: 0.3em;
+            color: var(--text-dim);
+            font-weight: 700;
+            padding: 0 2px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-transform: uppercase;
+        }
+        .kin-title::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, var(--border), transparent);
+        }
+        .kin-stage {
+            position: relative;
+            flex: 1;
+            min-height: 360px;
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.06);
+            background:
+                radial-gradient(ellipse at 50% 42%, rgba(148,163,184,0.06) 0%, transparent 65%),
+                linear-gradient(180deg, rgba(16,20,36,0.55) 0%, rgba(6,8,16,0.92) 100%);
+            box-shadow:
+                inset 0 1px 0 rgba(255,255,255,0.05),
+                inset 0 -1px 0 rgba(0,0,0,0.6),
+                0 14px 44px rgba(0,0,0,0.55);
+            overflow: hidden;
+            perspective: 900px;
+        }
+        .kin-scaler {
+            position: absolute;
+            inset: 0 0 68px 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .kin-rig-holder {
+            position: relative;
+            width: 60px;
+            height: 260px;
+            transform: scale(1.3);
+            transform-origin: center center;
+        }
+        .kin-hud-bar {
+            position: absolute;
+            left: 10px; right: 10px; bottom: 10px;
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            z-index: 4;
+        }
+        .kin-hud-cell {
+            background: rgba(0,0,0,0.45);
+            backdrop-filter: blur(var(--glass-blur-sm));
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 10px;
+            padding: 6px 8px 7px;
+            text-align: center;
+        }
+        .kin-hud-k {
+            font-size: 0.52em;
+            color: var(--text-dim);
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+            font-weight: 600;
+        }
+        .kin-hud-v {
+            font-size: 0.82em;
+            font-weight: 700;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+            line-height: 1.2;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* 诊断按钮：替代测试区大色块 big-btn */
+        .diag-group {
+            margin-top: 14px;
+            padding: 10px 10px 12px;
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+        }
+        .diag-group + .diag-group { margin-top: 10px; }
+        .diag-group-title {
+            font-size: 0.64em;
+            font-weight: 700;
+            color: var(--text-muted);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .diag-btn-row {
+            display: grid;
+            gap: 6px;
+        }
+        .diag-btn-row.cols-2 { grid-template-columns: repeat(2, 1fr); }
+        .diag-btn-row.cols-3 { grid-template-columns: repeat(3, 1fr); }
+        .diag-btn {
+            padding: 8px 10px;
+            font-size: 0.72em;
+            font-weight: 600;
+            font-family: inherit;
+            color: var(--text-muted);
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all var(--transition);
+            white-space: nowrap;
+            text-align: center;
+        }
+        .diag-btn:hover {
+            color: var(--accent);
+            border-color: var(--border-active);
+            background: rgba(0,212,170,0.04);
+        }
+        .diag-btn:active { background: rgba(0,212,170,0.12); }
+        .diag-status {
+            margin-top: 8px;
+            padding: 6px 8px;
+            min-height: 24px;
+            font-size: 0.66em;
+            font-family: var(--font-mono);
+            background: rgba(0,0,0,0.25);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            color: var(--text-dim);
+            white-space: pre-line;
+            line-height: 1.5;
+        }
+
+        /* 主保存按钮：修复原绿字绿底不可见 bug，改为 accent 填充 + 深色文字 */
+        .save-btn {
+            width: 100%;
+            margin-top: 14px;
+            padding: 11px 16px;
+            background: var(--accent);
+            color: #062a23;
+            border: 1px solid var(--accent);
+            border-radius: var(--radius-sm);
+            font-family: inherit;
+            font-size: 0.82em;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+        .save-btn:hover {
+            background: #00e6bb;
+            box-shadow: 0 4px 12px rgba(0,212,170,0.25);
+        }
+        .save-btn:active { transform: translateY(1px); }
+
+        /* 骨架完成浮卡：到位瞬间弹出「标准/不标准/代偿」 */
+        .rig-flash {
+            position: absolute;
+            left: 50%;
+            top: 20%;
+            transform: translate(-50%, -50%) scale(0.4);
+            padding: 8px 22px;
+            border-radius: 999px;
+            font-size: 1.3em;
+            font-weight: 800;
+            letter-spacing: 0.18em;
+            background: rgba(10,14,23,0.85);
+            backdrop-filter: blur(6px);
+            border: 2px solid currentColor;
+            color: var(--accent);
+            opacity: 0;
+            pointer-events: none;
+            z-index: 10;
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
+            text-shadow: 0 0 12px currentColor;
+        }
+        .rig-flash.rig-flash-anim {
+            animation: rigFlashPop 950ms cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        @keyframes rigFlashPop {
+            0%   { transform: translate(-50%, -50%) scale(0.4); opacity: 0; }
+            14%  { transform: translate(-50%, -50%) scale(1.18); opacity: 1; }
+            28%  { transform: translate(-50%, -50%) scale(1.0);  opacity: 1; }
+            72%  { transform: translate(-50%, -50%) scale(1.0);  opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(0.92); opacity: 0; }
+        }
     </style>
 </head>
 <body>
@@ -1167,12 +1482,13 @@
             <div class="logo-text">Iron<span>Buddy</span></div>
         </div>
 
-        <!-- 只读状态标签 (不可切换，切换在设置Tab) -->
-        <div style="display:flex; gap:8px; align-items:center;">
-            <span class="status-tag" id="tagExercise">深蹲</span>
-            <span class="status-tag" id="tagVision">本地</span>
-            <span class="status-tag" id="tagHdmi" style="display:none;">HDMI</span>
+        <!-- 模式条：居中三段 segmented-bar，纵向与底部 总标准/总违规/总代偿 对齐 -->
+        <div class="mode-segbar" role="group" aria-label="训练模式状态">
+            <span class="seg active" id="tagExercise">深蹲</span>
+            <span class="seg active" id="tagVision">本地</span>
+            <span class="seg active" id="tagInferenceMode">纯视觉</span>
         </div>
+        <span class="status-tag" id="tagHdmi" style="display:none;">HDMI</span>
 
         <div class="header-controls">
             <button class="icon-btn" id="muteBtn" onclick="toggleMute()" title="静音切换">&#128266;</button>
@@ -1209,7 +1525,7 @@
                         <div class="hud-state" id="hudState" style="color:var(--accent);">等待中</div>
                     </div>
                     <div class="hud-chip">
-                        <div class="hud-label" id="hudAngleLabel">膝盖角度</div>
+                        <div class="hud-label" id="hudAngleLabel">角度</div>
                         <div class="hud-value" id="hudAngle">--</div>
                     </div>
                     <div class="hud-chip">
@@ -1227,10 +1543,12 @@
                         <circle class="gauge-bg" cx="50" cy="50" r="40" stroke-dasharray="251.2"></circle>
                         <circle class="gauge-fill" id="ampCircle" cx="50" cy="50" r="40"
                                 stroke="var(--accent-blue)" stroke-dasharray="251.2" stroke-dashoffset="251.2"></circle>
+                        <text x="50" y="42" id="romCenterAngle" text-anchor="middle" dominant-baseline="central"
+                              style="font-size:11px; fill:var(--text-1); font-weight:600;">0&#176;</text>
                     </svg>
-                    <div class="gauge-center">
-                        <div class="gauge-num" id="ampText" style="color:var(--accent-blue);">0%</div>
-                        <div class="gauge-label">动作幅度</div>
+                    <div class="gauge-center" style="top:62%;">
+                        <div class="gauge-num" id="ampText" style="color:var(--accent-blue); font-size:0.95em;">0&#176;</div>
+                        <div class="gauge-label">角度</div>
                     </div>
                 </div>
                 <!-- AI similarity gauge -->
@@ -1258,12 +1576,8 @@
                     <div class="stat-val red" id="statFailed">0</div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-label">当前角度</div>
-                    <div class="stat-val blue" id="statAngle">--</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-label">合格率</div>
-                    <div class="stat-val amber" id="statRate">--</div>
+                    <div class="stat-label">代偿</div>
+                    <div class="stat-val amber" id="statComp">0</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">训练时长</div>
@@ -1277,7 +1591,7 @@
 
             <!-- Fatigue bar -->
             <div style="display:flex; align-items:center; gap:8px; padding:0 2px;">
-                <span style="font-size:0.62em; color:var(--text-dim); white-space:nowrap;">疲劳 (目标 1500)</span>
+                <span style="font-size:0.62em; color:var(--text-dim); white-space:nowrap;">疲劳 (目标 <span id="fatigueTargetDisplay">1500</span>)</span>
                 <div class="progress-track" style="flex:1;">
                     <div class="progress-fill" id="fatigueBar" style="width:0%; background:var(--accent-purple);"></div>
                 </div>
@@ -1289,48 +1603,47 @@
                 <button class="btn-action primary" id="btnSumm" onclick="triggerDeepseek()">&#128221; 生成点评</button>
                 <button class="btn-action" onclick="resetTimer()">&#9201; 重置计时</button>
             </div>
-
-            <!-- Coach chat -->
-            <div class="chat-section">
-                <div class="section-title">&#127908; 教练对话</div>
-                <div class="chat-messages" id="chatArea">
-                    <div class="chat-placeholder" id="chatPlaceholder">对着摄像头说"教练"开始语音对话</div>
-                </div>
-            </div>
-
-
-            <!-- EMG Waveform -->
-            <div class="emg-section" id="emgSection">
-                <div class="section-title">&#9889; EMG 肌电信号</div>
-                <div class="emg-canvas-wrap">
-                    <canvas id="emgCanvas" width="600" height="120"></canvas>
-                    <div class="emg-no-sensor" id="emgNoSensor">模拟数据 (无传感器)</div>
-                </div>
-                <div class="emg-legend" id="emgLegend"></div>
-            </div>
         </div>
 
         <!-- CENTER PANEL: Kinematics Rig (视频↔服务状态之间) -->
-        <aside class="center-panel" id="centerPanel">
-            <div class="center-title">骨架渲染</div>
-            <div id="kinematicsRigStage" style="position:relative; width:100%; height:280px; perspective:800px; padding-top:10px; overflow:hidden; background:rgba(0,0,0,0.25); border:1px solid var(--border); border-radius:var(--radius);">
-                <div id="rigGlow" class="rig-glow" style="position:absolute; top:50%; left:50%; width:110px; height:180px; transform:translate(-50%,-50%); border-radius:50%; box-shadow:0 0 20px rgba(52,211,153,0.15); transition:box-shadow 0.2s ease-out; z-index:0; pointer-events:none;"></div>
-                <div id="rigBody" style="position:absolute; left:50%; top:12px; width:36px; transform:translateX(-50%); z-index:2; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275);">
-                    <div style="width:30px; height:78px; background:linear-gradient(180deg,#60a5fa,#3b82f6); border-radius:15px; margin:0 auto; box-shadow:0 0 12px rgba(96,165,250,0.6); position:relative;">
-                        <div style="position:absolute; top:-30px; left:-2px; width:34px; height:34px; border-radius:50%; border:3px solid #60a5fa; box-shadow:inset 0 0 8px #60a5fa, 0 0 12px #60a5fa;"></div>
-                    </div>
-                    <div id="rigThigh" style="position:absolute; top:68px; left:6px; width:22px; height:70px; background:linear-gradient(180deg,#3b82f6,#1d4ed8); border-radius:11px; transform-origin:11px 11px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275), opacity 0.2s, box-shadow 0.3s; box-shadow:0 0 12px rgba(59,130,246,0.6); z-index:1;">
-                        <div id="rigCalf" style="position:absolute; top:58px; left:2px; width:18px; height:70px; background:linear-gradient(180deg,#1d4ed8,#1e3a8a); border-radius:9px; transform-origin:9px 9px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275); box-shadow:0 0 12px rgba(29,78,216,0.6);">
-                            <div style="position:absolute; bottom:0; left:-8px; width:34px; height:6px; background:#e2e8f0; border-radius:3px; box-shadow:0 0 8px #e2e8f0;"></div>
+        <aside class="center-panel kin-col" id="centerPanel">
+            <div class="kin-title">Kinematics<span style="letter-spacing:0;text-transform:none;color:var(--text-muted);font-weight:500;">骨架</span></div>
+            <div id="kinematicsRigStage" class="kin-stage">
+                <div id="rigGlow" class="rig-glow" style="position:absolute; top:48%; left:50%; width:140px; height:200px; transform:translate(-50%,-50%); border-radius:50%; box-shadow:0 0 24px rgba(148,163,184,0.1); transition:box-shadow 0.2s ease-out; z-index:0; pointer-events:none;"></div>
+                <div id="rigFlash" class="rig-flash">标准</div>
+                <div class="kin-scaler">
+                    <div class="kin-rig-holder">
+                    <div id="rigBody" style="position:absolute; left:50%; top:36px; width:36px; transform:translateX(-50%); z-index:2; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275);">
+                        <div style="width:30px; height:78px; background:linear-gradient(180deg,#94a3b8,#475569); border-radius:15px; margin:0 auto; box-shadow:inset 0 1px 0 rgba(255,255,255,0.18), 0 4px 12px rgba(0,0,0,0.45); position:relative;">
+                            <div style="position:absolute; top:-30px; left:-2px; width:34px; height:34px; border-radius:50%; border:2px solid #94a3b8; background:radial-gradient(circle at 35% 30%, #e2e8f0 0%, #64748b 70%, #334155 100%); box-shadow:inset 0 1px 2px rgba(255,255,255,0.3), 0 3px 10px rgba(0,0,0,0.55);"></div>
+                        </div>
+                        <div id="rigThigh" style="position:absolute; top:68px; left:6px; width:22px; height:70px; background:linear-gradient(180deg,#94a3b8,#475569); border-radius:11px; transform-origin:11px 11px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275), opacity 0.2s, box-shadow 0.3s; box-shadow:inset 0 1px 0 rgba(255,255,255,0.14), 0 3px 12px rgba(0,0,0,0.4); z-index:1;">
+                            <div id="rigCalf" style="position:absolute; top:58px; left:2px; width:18px; height:70px; background:linear-gradient(180deg,#64748b,#334155); border-radius:9px; transform-origin:9px 9px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275); box-shadow:inset 0 1px 0 rgba(255,255,255,0.1), 0 3px 10px rgba(0,0,0,0.45);">
+                                <div style="position:absolute; bottom:0; left:-8px; width:34px; height:6px; background:linear-gradient(180deg,#cbd5e1,#64748b); border-radius:3px; box-shadow:0 2px 4px rgba(0,0,0,0.5);"></div>
+                            </div>
+                        </div>
+                        <div id="rigUpperArm" style="position:absolute; top:14px; left:26px; width:16px; height:52px; background:linear-gradient(180deg,#94a3b8,#475569); border-radius:8px; transform-origin:8px 8px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275), opacity 0.2s, box-shadow 0.3s; box-shadow:inset 0 1px 0 rgba(255,255,255,0.14), 0 3px 10px rgba(0,0,0,0.4); z-index:3; opacity:0;">
+                            <div id="rigForearm" style="position:absolute; top:44px; left:1px; width:14px; height:52px; background:linear-gradient(180deg,#64748b,#334155); border-radius:7px; transform-origin:7px 7px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275); box-shadow:inset 0 1px 0 rgba(255,255,255,0.1), 0 3px 10px rgba(0,0,0,0.45);">
+                                <div style="position:absolute; bottom:-4px; left:-10px; width:34px; height:10px; background:linear-gradient(90deg,#1e293b,#94a3b8,#1e293b); border-radius:3px; box-shadow:0 2px 4px rgba(0,0,0,0.6);"></div>
+                            </div>
                         </div>
                     </div>
-                    <div id="rigUpperArm" style="position:absolute; top:14px; left:26px; width:16px; height:52px; background:linear-gradient(180deg,#f59e0b,#d97706); border-radius:8px; transform-origin:8px 8px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275), opacity 0.2s, box-shadow 0.3s; box-shadow:0 0 12px rgba(245,158,11,0.6); z-index:3; opacity:0;">
-                        <div id="rigForearm" style="position:absolute; top:44px; left:1px; width:14px; height:52px; background:linear-gradient(180deg,#d97706,#92400e); border-radius:7px; transform-origin:7px 7px; transition:transform 0.15s cubic-bezier(0.175,0.885,0.32,1.275); box-shadow:0 0 12px rgba(217,119,6,0.6);">
-                            <div style="position:absolute; bottom:-4px; left:-10px; width:34px; height:10px; background:linear-gradient(90deg,#334155,#64748b,#334155); border-radius:3px; box-shadow:0 0 8px rgba(100,116,139,0.8);"></div>
-                        </div>
                     </div>
                 </div>
-                <div id="rigStatusText" style="position:absolute; bottom:6px; left:0; right:0; z-index:4; font-size:0.75em; color:var(--text-muted); text-align:center;">训练状态光效</div>
+                <div class="kin-hud-bar">
+                    <div class="kin-hud-cell">
+                        <div class="kin-hud-k">Action</div>
+                        <div class="kin-hud-v" id="kinHudAction">深蹲</div>
+                    </div>
+                    <div class="kin-hud-cell">
+                        <div class="kin-hud-k">Angle</div>
+                        <div class="kin-hud-v" id="kinHudAngle">--</div>
+                    </div>
+                    <div class="kin-hud-cell">
+                        <div class="kin-hud-k">Status</div>
+                        <div class="kin-hud-v" id="rigStatusText">待机</div>
+                    </div>
+                </div>
             </div>
         </aside>
 
@@ -1359,9 +1672,22 @@
 
                 <!-- TAB 1: Console -->
                 <div class="tab-panel active" id="tab-console">
-                    <div class="section-title">&#128161; 服务状态</div>
-                    <div id="serviceList">
-                        <div class="svc-card"><div class="svc-dot unknown"></div><div class="svc-name">加载中...</div></div>
+                    <!-- EMG Waveform -->
+                    <div class="emg-section" id="emgSection" style="margin-bottom:12px;">
+                        <div class="section-title">&#9889; EMG 肌肉电波控制台</div>
+                        <div class="emg-canvas-wrap">
+                            <canvas id="emgCanvas" width="1600" height="220" style="width:100%; height:220px; display:block;"></canvas>
+                            <div class="emg-no-sensor" id="emgNoSensor">模拟数据 (无传感器)</div>
+                        </div>
+                        <div class="emg-legend" id="emgLegend"></div>
+                    </div>
+
+                    <!-- Unified coach chat (realtime + history) -->
+                    <div class="chat-section" style="margin-bottom:12px;">
+                        <div class="section-title">&#127908; 教练对话</div>
+                        <div class="chat-messages" id="chatArea" style="height:auto; min-height:80px; max-height:320px; overflow-y:auto;">
+                            <div class="chat-placeholder" id="chatPlaceholder">对着摄像头说"教练"开始语音对话</div>
+                        </div>
                     </div>
 
                     <div style="margin-top: 14px; display: flex; gap: 8px;">
@@ -1379,6 +1705,11 @@
                         <div class="info-cell"><div class="info-k">板端 Uptime</div><div class="info-v" id="infoUptime">--</div></div>
                         <div class="info-cell"><div class="info-k">CSV 数据集</div><div class="info-v" id="infoCsvCount">--</div></div>
                     </div>
+
+                    <div class="section-title" style="margin-top:12px;">&#128295; 服务状态</div>
+                    <div id="serviceListCenter" style="display:grid; grid-template-columns:repeat(5,1fr); gap:6px;">
+                        <div class="svc-mini"><span class="svc-mini-dot unknown"></span><span class="svc-mini-name">加载中</span></div>
+                    </div>
                 </div>
 
                 <!-- TAB 2: Logs -->
@@ -1395,6 +1726,10 @@
 
                 <!-- TAB 3: Data -->
                 <div class="tab-panel" id="tab-data">
+                    <a href="/database" target="_blank" style="display:block; padding:10px 14px; margin-bottom:12px; border:1px solid var(--accent, #5ec8ff); border-radius:6px; text-decoration:none; color:var(--accent, #5ec8ff); font-size:0.85em; background:rgba(94,200,255,0.06);">
+                        &#128202; 打开一站式数据库可视化 &rarr;
+                        <span style="display:block; font-size:0.78em; color:var(--text-dim); margin-top:3px;">8 张表 · 标签页切换 · 动作/种子筛选</span>
+                    </a>
                     <div class="section-title">&#128193; 训练数据</div>
                     <div class="data-tree" id="dataTree">
                         <div style="font-size:0.78em; color:var(--text-dim);">加载中...</div>
@@ -1424,24 +1759,16 @@
                         </select>
                     </div>
                     <!-- T2: 疲劳上限（语音可改 / UI 可改，双向同步）-->
+                    <!-- V6.1: 疲劳上限 + 推理模式 + 动作切换 全部改为语音硬编码 -->
+                    <!-- 语音: "疲劳上限改为1800" / "纯视觉" / "视觉加传感" / "切换到深蹲/弯举" -->
                     <div class="form-group">
-                        <label class="form-label">疲劳上限 (目标积分)</label>
-                        <div style="display:flex; gap:4px;">
-                            <input type="number" class="form-input" id="cfgFatigueLimit" value="1500" min="100" max="10000" step="50" style="flex:1;">
-                            <button class="icon-btn" onclick="setFatigueLimit()" title="保存疲劳上限" style="padding:0 10px;">保存</button>
+                        <label class="form-label" style="color:var(--text-muted);font-size:0.7em;">💡 模式 / 阈值 请用语音硬编码控制</label>
+                        <div style="font-size:0.65em; color:var(--text-dim); padding:4px 6px; background:rgba(255,255,255,0.04); border-radius:4px; line-height:1.5;">
+                            · 疲劳上限: 喊"教练，疲劳上限改为X"<br>
+                            · 推理模式: 喊"教练，纯视觉/视觉加传感"<br>
+                            · 动作切换: 喊"教练，切换到深蹲/弯举"<br>
+                            · 当前状态见顶部模式条
                         </div>
-                    </div>
-                    <!-- T3: MVC 校准（SENIAM 协议）-->
-                    <div class="form-group">
-                        <label class="form-label">肌电 MVC 校准 <span id="mvcStatusBadge" style="font-size:0.72em; color:var(--accent-red); margin-left:6px;">未校准</span></label>
-                        <button class="big-btn start" onclick="openMvcModal()" style="font-size:0.75em; background:var(--accent-blue);">开始 MVC 校准 (SENIAM 2000)</button>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">推理模式</label>
-                        <select class="form-select" id="cfgInferenceMode" onchange="switchInferenceMode(this.value)">
-                            <option value="pure_vision">纯视觉 (if-else角度判断)</option>
-                            <option value="vision_sensor">视觉+传感 (GRU神经网络)</option>
-                        </select>
                     </div>
                     <div class="form-group">
                         <label class="form-label">视觉后端</label>
@@ -1451,53 +1778,159 @@
                         </select>
                     </div>
 
-                    <!-- 用户参数 -->
-                    <div class="section-title" style="margin-top:16px;">&#128100; 用户参数</div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-                        <div class="form-group">
-                            <label class="form-label">身高 (cm)</label>
-                            <input type="number" class="form-input" id="cfgHeight" value="175" min="100" max="220">
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">体重 (kg)</label>
-                            <input type="number" class="form-input" id="cfgWeight" value="70" min="30" max="200">
-                        </div>
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
-                        <div class="form-group">
-                            <label class="form-label">性别</label>
-                            <select class="form-select" id="cfgGender">
-                                <option value="male">男</option>
-                                <option value="female">女</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">器材 (kg)</label>
-                            <input type="number" class="form-input" id="cfgEquipment" value="0" min="0" max="100">
-                        </div>
-                    </div>
-                    <button class="big-btn start" onclick="submitProfile()" style="font-size:0.75em;">保存参数</button>
-
                     <!-- API 配置 -->
                     <div class="section-title" style="margin-top:16px;">&#128273; API 密钥</div>
                     <div class="form-group">
-                        <label class="form-label">DeepSeek Key</label>
+                        <label class="form-label">DeepSeek Key (前端实时教练)</label>
                         <input type="password" class="form-input" id="cfgApiKey" placeholder="sk-..." autocomplete="off">
                     </div>
+                    <!-- LLM 后端选项已移除 V4.8: 前端固定 DeepSeek 直连,OpenClaw 仅常驻后台 -->
+                    <input type="hidden" id="cfgLlmBackend" value="direct">
+
+                    <div class="section-title" style="margin-top:12px;font-size:0.72em;color:var(--text-muted);">🎙️ 百度语音 (TTS + STT)</div>
                     <div class="form-group">
-                        <label class="form-label">LLM 后端</label>
-                        <select class="form-select" id="cfgLlmBackend">
-                            <option value="direct">DeepSeek 直连</option>
-                            <option value="openclaw">OpenClaw 网关</option>
-                        </select>
+                        <label class="form-label">Baidu AppID</label>
+                        <input class="form-input" id="cfgBaiduAppId" placeholder="14xxxxxx" autocomplete="off">
                     </div>
-                    <button class="big-btn start" onclick="saveApiConfig()" style="font-size:0.75em;">保存 API</button>
+                    <div class="form-group">
+                        <label class="form-label">Baidu API Key</label>
+                        <input type="password" class="form-input" id="cfgBaiduApiKey" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Baidu Secret</label>
+                        <input type="password" class="form-input" id="cfgBaiduSecret" autocomplete="off">
+                    </div>
+
+                    <div class="section-title" style="margin-top:12px;font-size:0.72em;color:var(--text-muted);">📦 飞书 IronBuddy Coach 机器人</div>
+                    <div class="form-group">
+                        <label class="form-label">Feishu AppID</label>
+                        <input class="form-input" id="cfgFeishuAppId" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Feishu AppSecret</label>
+                        <input type="password" class="form-input" id="cfgFeishuAppSecret" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Feishu ChatID (会话ID)</label>
+                        <input class="form-input" id="cfgFeishuChatId" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Feishu Webhook (可选, 兜底)</label>
+                        <input type="password" class="form-input" id="cfgFeishuWebhook" placeholder="https://open.feishu.cn/..." autocomplete="off">
+                    </div>
+
+                    <div class="section-title" style="margin-top:12px;font-size:0.72em;color:var(--text-muted);">☁️ 云端 GPU RTMPose</div>
+                    <div class="form-group">
+                        <label class="form-label">Cloud RTMPose URL</label>
+                        <input class="form-input" id="cfgCloudUrl" placeholder="http://127.0.0.1:6006/infer" autocomplete="off">
+                    </div>
+
+                    <!-- 保存所有配置 -->
+                    <button class="save-btn" onclick="saveApiConfig()">保存所有配置</button>
                     <div id="apiConfigStatus" style="color:var(--text-muted);font-size:11px;margin-top:4px;"></div>
 
-                    <!-- 飞书推送 -->
-                    <div class="section-title" style="margin-top:16px;">&#128230; 飞书推送</div>
-                    <button class="big-btn start" onclick="sendFeishuPlan()" style="font-size:0.75em; background:var(--accent-blue);">生成并推送健身规划到飞书</button>
-                    <div id="feishuStatus" style="color:var(--text-muted);font-size:11px;margin-top:4px;"></div>
+                    <!-- 测试与诊断 -->
+                    <div class="section-title" style="margin-top:16px;">🧪 测试与诊断</div>
+
+                    <!-- 组 1: 云端 GPU RTMPose -->
+                    <div class="diag-group">
+                        <div class="diag-group-title">☁️ 云端 GPU RTMPose</div>
+                        <div class="diag-btn-row cols-2">
+                            <button class="diag-btn" onclick="testCloudConnectivity()">测试连通</button>
+                            <button class="diag-btn" onclick="restartTunnel()">重启隧道</button>
+                        </div>
+                        <div class="diag-status" id="cloudVerifyStatus">—</div>
+                    </div>
+
+                    <!-- 组 2: 百度语音 -->
+                    <div class="diag-group">
+                        <div class="diag-group-title">🎙️ 百度语音 (TTS + STT)</div>
+                        <div class="diag-btn-row cols-3">
+                            <button class="diag-btn" onclick="reloadVoice()">重启服务</button>
+                            <button class="diag-btn" onclick="testVoice()">测试播报</button>
+                            <button class="diag-btn" onclick="diagVoice()">语音诊断</button>
+                        </div>
+                        <div class="diag-status" id="voiceDiagStatus">—</div>
+                    </div>
+
+                    <!-- 组 3: 测试采集 (V7.16 FSM-对齐 rep + 分类落盘) -->
+                    <div class="diag-group" id="diagTestCapture">
+                        <div class="diag-group-title">🎬 测试采集 (FSM-对齐 rep)</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;">
+                            <select id="capExercise" style="padding:6px;border-radius:6px;background:rgba(0,0,0,0.18);color:var(--text-primary);border:1px solid var(--border-weak);font-size:12px;">
+                                <option value="squat">深蹲</option>
+                                <option value="bicep_curl">弯举</option>
+                            </select>
+                            <select id="capLabel" style="padding:6px;border-radius:6px;background:rgba(0,0,0,0.18);color:var(--text-primary);border:1px solid var(--border-weak);font-size:12px;">
+                                <option value="standard">标准 standard</option>
+                                <option value="compensating">代偿 compensating</option>
+                                <option value="non_standard">不合格 non_standard</option>
+                            </select>
+                        </div>
+                        <div class="diag-btn-row cols-3">
+                            <button class="diag-btn" id="capStartBtn" onclick="testCaptureStart()">▶ 开始采集</button>
+                            <button class="diag-btn" id="capStopBtn" onclick="testCaptureStop()" disabled>■ 停止并保存</button>
+                            <button class="diag-btn" id="capClearBtn" onclick="testCaptureClear()" disabled>✕ 清空</button>
+                        </div>
+                        <div class="diag-status" id="capStatus">— 空闲</div>
+                        <div id="capMeta" style="margin-top:6px;font-size:10.5px;color:var(--text-muted);line-height:1.55;"></div>
+                    </div>
+
+                    <!-- 组 4: 视觉特征探测 (env-gated, 默认隐藏, 仅 IRONBUDDY_PROBE_ENABLED=1 激活) -->
+                    <div class="diag-group" id="diagProbe" style="display:none">
+                        <div class="diag-group-title">🎯 视觉特征探测 (Phase 0)</div>
+                        <div class="diag-btn-row cols-2">
+                            <button class="diag-btn" onclick="probeStart()">启动探测</button>
+                            <button class="diag-btn" onclick="probeStop()">停止探测</button>
+                        </div>
+                        <div class="diag-status" id="probeStatus">—</div>
+                        <!-- 6 标签按钮: 用户手机播对应视频前点一次, 后续 rep 自动打此标签 -->
+                        <div style="margin-top:10px;font-size:11px;color:var(--text-muted);margin-bottom:4px;">
+                            📌 当前标签: <span id="probeCurLabel" style="color:var(--accent-teal);font-weight:600">unlabeled</span>
+                            · 播视频前点下面对应按钮
+                        </div>
+                        <div class="diag-btn-row cols-3" style="margin-bottom:4px;">
+                            <button class="diag-btn probe-lbl-btn" data-label="squat_standard" onclick="probeSetLabel('squat_standard')">深蹲·标准</button>
+                            <button class="diag-btn probe-lbl-btn" data-label="squat_compensating" onclick="probeSetLabel('squat_compensating')">深蹲·代偿</button>
+                            <button class="diag-btn probe-lbl-btn" data-label="squat_non_standard" onclick="probeSetLabel('squat_non_standard')">深蹲·不标准</button>
+                        </div>
+                        <div class="diag-btn-row cols-3">
+                            <button class="diag-btn probe-lbl-btn" data-label="curl_standard" onclick="probeSetLabel('curl_standard')">弯举·标准</button>
+                            <button class="diag-btn probe-lbl-btn" data-label="curl_compensating" onclick="probeSetLabel('curl_compensating')">弯举·代偿</button>
+                            <button class="diag-btn probe-lbl-btn" data-label="curl_non_standard" onclick="probeSetLabel('curl_non_standard')">弯举·不标准</button>
+                        </div>
+                        <div class="diag-btn-row" style="margin-top:6px;">
+                            <button class="diag-btn" onclick="probeSetLabel('unlabeled')" style="flex:0 0 120px;">清除标签</button>
+                            <button class="diag-btn" onclick="probeClear()" style="flex:0 0 120px;">清空数据</button>
+                            <button class="diag-btn" onclick="probeCopyCsv()" style="flex:1;">复制为 CSV</button>
+                        </div>
+                        <div style="margin-top:8px;max-height:280px;overflow:auto;font-size:10.5px;line-height:1.45;font-family:ui-monospace,Menlo,monospace;background:rgba(0,0,0,0.24);padding:6px 8px;border-radius:6px;">
+                            <table id="probeTable" style="width:100%;border-collapse:collapse;">
+                                <thead style="color:var(--accent-teal);">
+                                    <tr>
+                                        <th style="text-align:left;padding:2px 4px;">#</th>
+                                        <th style="text-align:left;">label</th>
+                                        <th style="text-align:left;">动作</th>
+                                        <th style="text-align:right;">min°</th>
+                                        <th style="text-align:right;">max°</th>
+                                        <th style="text-align:right;">v_desc</th>
+                                        <th style="text-align:right;">v_asc</th>
+                                        <th style="text-align:right;">accel</th>
+                                        <th style="text-align:right;">dur</th>
+                                        <th style="text-align:right;">trunk</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="probeTableBody">
+                                    <tr><td colspan="10" style="color:var(--text-muted);text-align:center;padding:12px">点击「启动探测」+ 选一个标签, 然后播对应视频让摄像头拍摄</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div style="margin-top:6px;font-size:10px;color:var(--text-muted);">
+                            只在 FSM 真正计数的 rep 完成时才会显示 · 环境变量 <code>IRONBUDDY_PROBE_ENABLED</code> 控制显隐
+                        </div>
+                    </div>
+
+                    <!-- V4.8: 飞书推送/MVC 校准按钮已删除, 全部由语音硬编码触发 -->
                 </div>
             </div>
         </aside>
@@ -1506,58 +1939,25 @@
         <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()">&#9664;</button>
     </div>
 
-    <!-- ===== STATUS BAR ===== -->
+    <!-- ===== STATUS BAR (V7.11: 跨组累计总计, 用于 OpenClaw 训练汇总) ===== -->
     <div class="status-bar">
         <div class="sb-item">
-            <span class="sb-label">总次数</span>
-            <span class="sb-value green" id="sbReps">0</span>
+            <span class="sb-label">总标准</span>
+            <span class="sb-value green" id="sbTotalGood">0</span>
         </div>
         <div class="sb-item">
-            <span class="sb-label">合格率</span>
-            <span class="sb-value amber" id="sbRate">--</span>
+            <span class="sb-label">总违规</span>
+            <span class="sb-value" id="sbTotalFailed" style="color:var(--accent-red);">0</span>
         </div>
         <div class="sb-item">
-            <span class="sb-label">训练时长</span>
-            <span class="sb-value blue" id="sbTime">00:00</span>
-        </div>
-        <div class="sb-item">
-            <span class="sb-label">视觉模式</span>
-            <span class="sb-value purple" id="sbMode">云端</span>
-        </div>
-        <div class="sb-item">
-            <span class="sb-label">板端</span>
-            <span class="sb-value" id="sbBoard" style="color:var(--text-dim);">--</span>
+            <span class="sb-label">总代偿</span>
+            <span class="sb-value amber" id="sbTotalComp">0</span>
         </div>
     </div>
 
     <!-- Config Modal 已删除，所有设置统一在 Settings Tab -->
 
-    <!-- T3: MVC 校准模态框（SENIAM 2000 协议）-->
-    <div class="modal-overlay" id="mvcCalibModal">
-        <div class="modal-box" style="width:420px;">
-            <h2>&#129504; MVC 最大自主收缩标定</h2>
-            <div id="mvcPhase" style="font-size:0.85em; color:var(--text-secondary); margin-bottom:12px;">
-                <!-- 动态填充 -->
-            </div>
-            <div style="background:rgba(0,0,0,0.25); border-radius:6px; padding:10px; margin-bottom:12px; font-size:0.72em; color:var(--text-muted);">
-                <div id="mvcSeniamTip">
-                    <strong style="color:var(--accent-blue);">SENIAM 2000 协议</strong><br>
-                    <span id="mvcPlacementCurl" style="display:none;">肱二头肌电极：肘窝→肩峰 1/3 处，电极间距 20mm。前臂电极：肘窝下 5cm 掌侧。体位：坐姿，肘 90°，前臂旋后。</span>
-                    <span id="mvcPlacementSquat" style="display:none;">股直肌电极：髂前上棘→髌骨上缘 1/2 处，电极间距 20mm。竖脊肌电极：L1-L3 两侧 3cm。体位：坐姿，膝 60°。</span>
-                    <div style="margin-top:6px;">
-                        要求：3 次 × 5 秒最大等长发力，间隔 ≥ 2 分钟。
-                    </div>
-                </div>
-            </div>
-            <div id="mvcCountdown" style="font-size:3em; font-weight:800; text-align:center; min-height:1.2em; color:var(--accent-amber);"></div>
-            <div id="mvcInstruction" style="text-align:center; font-size:0.9em; color:var(--text-secondary); margin-top:6px; min-height:1.2em;"></div>
-            <div id="mvcResult" style="margin-top:10px; padding:8px; background:rgba(0,0,0,0.2); border-radius:4px; font-size:0.75em; color:var(--text-muted); min-height:1.2em;"></div>
-            <div class="modal-actions">
-                <button class="btn-action" onclick="closeMvcModal()">取消</button>
-                <button class="btn-action primary" id="mvcPrimaryBtn" onclick="mvcPrimaryAction()">开始</button>
-            </div>
-        </div>
-    </div>
+    <!-- MVC Modal 已全面被软硬件域对齐取代并清除 -->
 
     <!-- Toast -->
     <div class="toast" id="alertToast">
@@ -1579,6 +1979,7 @@ const STATE_MAP = {
     'IDLE':           { text: '站立待命',     color: 'var(--accent-blue)' },
     'STAND':          { text: '锁定目标',     color: 'var(--accent-blue)' },
     'DESCENDING':     { text: '下蹲中 ⬇',    color: 'var(--accent-amber)' },
+    'BOTTOM':         { text: '蹲到底 ⏬',   color: 'var(--accent-red)' },
     'ASCENDING':      { text: '起身中 ⬆',    color: 'var(--accent-green)' },
     'BOTTOM':         { text: '触底 OK',      color: 'var(--accent-green)' },
     'INVALID_ASCENT': { text: '半蹲违规',     color: 'var(--accent-red)' },
@@ -1655,7 +2056,7 @@ function selectExercise(ex) {
     } else {
         if (gl) gl.textContent = '标准深蹲';
         if (fl) fl.textContent = '违规半蹲';
-        if (al) al.textContent = '膝盖角度';
+        if (al) al.textContent = '角度';
     }
     fetch('/api/user_profile', {
         method: 'POST',
@@ -1666,19 +2067,30 @@ function selectExercise(ex) {
 }
 
 // ===== Vision Mode =====
-function switchVision(mode) {
+async function switchVision(mode) {
     visionMode = mode;
     var sbMode = document.getElementById('sbMode');
     if (sbMode) sbMode.textContent = mode === 'cloud' ? '云端' : '本地';
     var sel = document.getElementById('cfgVisionMode');
-    if (sel) sel.value = mode;
+    if (sel) { sel.value = mode; sel.disabled = true; }
     var tag = document.getElementById('tagVision');
     if (tag) tag.textContent = mode === 'cloud' ? '云端' : '本地';
-    fetch('/api/switch_vision', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({mode: mode})
-    }).catch(function() {});
+    showToast('视觉切换中', '正在切换到 ' + mode + '...', false);
+    try {
+        await fetch('/api/switch_vision', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({mode: mode})
+        });
+    } catch(e) {}
+    setTimeout(async function() {
+        try {
+            var r = await fetch('/api/vision_mode', {cache:'no-store'});
+            var d = await r.json();
+            showToast('视觉模式', '已切换到 ' + (d.mode || mode), false);
+        } catch(e) { showToast('视觉模式', '切换完成', false); }
+        if (sel) sel.disabled = false;
+    }, 1500);
 }
 
 // ===== Inference Mode =====
@@ -1686,9 +2098,6 @@ var inferenceMode = 'pure_vision';
 
 function switchInferenceMode(mode) {
     inferenceMode = mode;
-    // Show/hide EMG section
-    var emgSec = document.getElementById('emgSection');
-    if (emgSec) emgSec.style.display = mode === 'vision_sensor' ? '' : 'none';
     // Update AI gauge label
     var nnLabel = document.getElementById('nnLabel');
     var nnText = document.getElementById('nnText');
@@ -1701,12 +2110,39 @@ function switchInferenceMode(mode) {
     }
     var sel = document.getElementById('cfgInferenceMode');
     if (sel) sel.value = mode;
+    var chip = document.getElementById('tagInferenceMode');
+    if (chip) chip.textContent = (mode === 'vision_sensor') ? '视觉+传感' : '纯视觉';
     fetch('/api/switch_inference_mode', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({mode: mode})
     }).catch(function() {});
 }
+
+// V7.7: Poll inference mode every 1s（唯一权威写者，与其他顶部标签同频）
+// 与 /api/inference_mode ← /dev/shm/inference_mode.json 对齐（用户意图真源）
+// updateHeaderTags 内的 fsm_state.inference_mode 分支已移除，消除横跳
+setInterval(function() {
+    fetch('/api/inference_mode', {cache:'no-store'})
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (!d || !d.mode) return;
+            var chip = document.getElementById('tagInferenceMode');
+            if (chip) chip.textContent = (d.mode === 'vision_sensor') ? '视觉+传感' : '纯视觉';
+            var sel = document.getElementById('cfgInferenceMode');
+            if (sel && sel.value !== d.mode) sel.value = d.mode;
+            if (inferenceMode !== d.mode) {
+                inferenceMode = d.mode;
+                var nnLabel = document.getElementById('nnLabel');
+                var nnText = document.getElementById('nnText');
+                if (d.mode === 'pure_vision') {
+                    if (nnLabel) nnLabel.textContent = '角度判定';
+                    if (nnText) nnText.textContent = 'IF';
+                }
+            }
+        })
+        .catch(function() {});
+}, 1000);
 
 // ===== Mute =====
 function toggleMute() {
@@ -1746,131 +2182,7 @@ function setFatigueLimit() {
     }).catch(() => {});
 }
 
-// ===== T3: MVC Calibration Modal (SENIAM 2000, 3 rounds x 5s effort) =====
-let _mvcState = { round: 0, phase: 'idle', timer: null, exercise: 'squat' };
-const MVC_ROUND_COUNT = 3;
-const MVC_EFFORT_SEC = 5;
-const MVC_REST_SEC = 120; // UI will allow skipping in demo mode since no hardware yet
 
-function openMvcModal() {
-    // Read current exercise from cfgExercise select
-    const sel = document.getElementById('cfgExercise');
-    _mvcState.exercise = (sel && sel.value === 'bicep_curl') ? 'curl' : 'squat';
-    _mvcState.round = 0;
-    _mvcState.phase = 'idle';
-    _mvcResetUI();
-    // Show SENIAM tip for chosen exercise
-    const curlTip = document.getElementById('mvcPlacementCurl');
-    const squatTip = document.getElementById('mvcPlacementSquat');
-    if (curlTip) curlTip.style.display = (_mvcState.exercise === 'curl') ? 'inline' : 'none';
-    if (squatTip) squatTip.style.display = (_mvcState.exercise === 'squat') ? 'inline' : 'none';
-    const modal = document.getElementById('mvcCalibModal');
-    if (modal) modal.classList.add('show');
-}
-
-function closeMvcModal() {
-    if (_mvcState.timer) { clearTimeout(_mvcState.timer); _mvcState.timer = null; }
-    _mvcState.phase = 'idle';
-    const modal = document.getElementById('mvcCalibModal');
-    if (modal) modal.classList.remove('show');
-}
-
-function _mvcResetUI() {
-    _setText('mvcPhase', '准备开始：共 ' + MVC_ROUND_COUNT + ' 次 × ' + MVC_EFFORT_SEC + ' 秒最大发力');
-    _setText('mvcCountdown', '');
-    _setText('mvcInstruction', '就位后点"开始"');
-    _setText('mvcResult', '');
-    const btn = document.getElementById('mvcPrimaryBtn');
-    if (btn) btn.textContent = '开始';
-}
-
-function mvcPrimaryAction() {
-    if (_mvcState.phase === 'idle' || _mvcState.phase === 'rest') {
-        _mvcStartRound();
-    } else if (_mvcState.phase === 'done') {
-        _mvcSubmit();
-    }
-}
-
-function _mvcStartRound() {
-    _mvcState.round += 1;
-    const r = _mvcState.round;
-    _setText('mvcPhase', '第 ' + r + ' / ' + MVC_ROUND_COUNT + ' 次');
-    _mvcCountdown(3, function() { _mvcDoEffort(); });
-    const btn = document.getElementById('mvcPrimaryBtn');
-    if (btn) { btn.textContent = '进行中...'; btn.disabled = true; }
-}
-
-function _mvcCountdown(n, onDone) {
-    _mvcState.phase = 'countdown';
-    _setText('mvcInstruction', '准备...');
-    _setText('mvcCountdown', n);
-    if (n <= 0) { onDone(); return; }
-    _mvcState.timer = setTimeout(function() { _mvcCountdown(n - 1, onDone); }, 1000);
-}
-
-function _mvcDoEffort() {
-    _mvcState.phase = 'effort';
-    _setText('mvcInstruction', '最大发力！保持！');
-    let s = MVC_EFFORT_SEC;
-    _setText('mvcCountdown', s);
-    function tick() {
-        s -= 1;
-        if (s <= 0) { _mvcAfterEffort(); return; }
-        _setText('mvcCountdown', s);
-        _mvcState.timer = setTimeout(tick, 1000);
-    }
-    _mvcState.timer = setTimeout(tick, 1000);
-}
-
-function _mvcAfterEffort() {
-    const btn = document.getElementById('mvcPrimaryBtn');
-    if (btn) btn.disabled = false;
-    if (_mvcState.round >= MVC_ROUND_COUNT) {
-        _mvcState.phase = 'done';
-        _setText('mvcCountdown', '✓');
-        _setText('mvcInstruction', '3 次采样完成');
-        _setText('mvcResult', '板端未连接：peak 值以占位符写入 /dev/shm/emg_calibration.json');
-        if (btn) btn.textContent = '提交标定';
-    } else {
-        _mvcState.phase = 'rest';
-        _setText('mvcCountdown', '');
-        _setText('mvcInstruction', '休息 2 分钟后点"继续下一次"（演示可立即继续）');
-        if (btn) btn.textContent = '继续下一次';
-    }
-}
-
-function _mvcSubmit() {
-    fetch('/api/mvc_calibration', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({
-            exercise: _mvcState.exercise,
-            peak_mvc: { ch0: null, ch1: null },  // 板未连接时为 null
-            std_pct: null,
-        })
-    }).then(r => r.json()).then(d => {
-        if (d && d.ok) {
-            if (typeof showToast === 'function') showToast('标定已记录', 'SENIAM-2000 骨架已写入', false);
-            const badge = document.getElementById('mvcStatusBadge');
-            if (badge) { badge.textContent = '已校准 (骨架)'; badge.style.color = 'var(--accent-green)'; }
-            closeMvcModal();
-        }
-    }).catch(() => {});
-}
-
-// Poll calibration state on load to sync badge
-(function() {
-    fetch('/api/mvc_calibration', { cache: 'no-store' })
-        .then(r => r.json())
-        .then(d => {
-            const badge = document.getElementById('mvcStatusBadge');
-            if (badge && d && d.calibrated) {
-                badge.textContent = '已校准';
-                badge.style.color = 'var(--accent-green)';
-            }
-        }).catch(() => {});
-})();
 
 // ===== Timer =====
 function startTimer() {
@@ -1943,42 +2255,63 @@ async function resetSession() {
     setTimeout(() => { btn.disabled = false; btn.innerHTML = '&#128260; 重置统计'; }, 800);
 }
 
+var deepseekTimeoutId = null;
 async function triggerDeepseek() {
     const btn = document.getElementById('btnSumm');
     btn.disabled = true;
-    btn.textContent = '教练思考中...';
+    btn.textContent = '生成并发送战报...';
     btn.style.opacity = '0.6';
     document.getElementById('chatArea').innerHTML =
-        '<div class="chat-placeholder" style="animation:blink 1.5s infinite;">等待教练点评...</div>';
-    try { await fetch('/trigger_deepseek', { method: 'POST' }); } catch(e) {}
-}
-
-// ===== Profile =====
-async function submitProfile() {
-    const data = {
-        height_cm: parseInt(document.getElementById('cfgHeight').value),
-        weight_kg: parseInt(document.getElementById('cfgWeight').value),
-        exercise: document.getElementById('cfgExercise').value,
-        equipment_kg: parseInt(document.getElementById('cfgEquipment').value),
-        gender: document.getElementById('cfgGender').value,
-    };
-    try {
-        await fetch('/api/user_profile', {
+        '<div class="chat-placeholder" style="animation:blink 1.5s infinite;">等待智能认知枢纽下发战报并推向飞书...</div>';
+    try { 
+        await fetch('/api/feishu/push', { 
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify(data)
-        });
-        showToast('设置已保存', '用户参数已更新', false);
-    } catch(e) {
-        showToast('保存失败', String(e), true);
-    }
+            body: JSON.stringify({'type': 'summary'}) 
+        }); 
+    } catch(e) {}
+    if (deepseekTimeoutId) clearTimeout(deepseekTimeoutId);
+    deepseekTimeoutId = setTimeout(function() {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '&#128221; 生成点评';
+            btn.style.opacity = '1';
+        }
+        var chatArea = document.getElementById('chatArea');
+        if (chatArea) chatArea.innerHTML =
+            '<div class="chat-placeholder" style="color:var(--accent-amber);">飞书推送请求耗时或超时，请检查后端和网络</div>';
+        deepseekTimeoutId = null;
+    }, 45000); // 维持原本的超时补偿保护
 }
 
+// ===== Profile (removed in V4.5 UI overhaul; submitProfileModal kept for legacy modal) =====
+
 async function saveApiConfig() {
-    const key = document.getElementById('cfgApiKey').value.trim();
-    const backend = document.getElementById('cfgLlmBackend').value;
     const statusEl = document.getElementById('apiConfigStatus');
-    if (!key && backend === 'direct') {
+    const fieldMap = {
+        deepseek_api_key: 'cfgApiKey',
+        llm_backend: 'cfgLlmBackend',
+        BAIDU_APP_ID: 'cfgBaiduAppId',
+        BAIDU_API_KEY: 'cfgBaiduApiKey',
+        BAIDU_SECRET_KEY: 'cfgBaiduSecret',
+        FEISHU_APP_ID: 'cfgFeishuAppId',
+        FEISHU_APP_SECRET: 'cfgFeishuAppSecret',
+        FEISHU_CHAT_ID: 'cfgFeishuChatId',
+        FEISHU_WEBHOOK: 'cfgFeishuWebhook',
+        CLOUD_RTMPOSE_URL: 'cfgCloudUrl',
+    };
+    const body = {};
+    for (const key in fieldMap) {
+        const el = document.getElementById(fieldMap[key]);
+        if (!el) continue;
+        const val = (el.value || '').trim();
+        // Skip empty fields whose placeholder indicates a saved masked value.
+        if (val === '' && el.placeholder && el.placeholder.indexOf('已保存') === 0) continue;
+        body[key] = val;
+    }
+    const backend = body.llm_backend || 'direct';
+    const deepseek = body.deepseek_api_key;
+    if (backend === 'direct' && deepseek === '' && !(document.getElementById('cfgApiKey').placeholder || '').startsWith('已保存')) {
         statusEl.textContent = '直连模式需要填写 API Key';
         statusEl.style.color = 'var(--accent-red)';
         return;
@@ -1987,13 +2320,16 @@ async function saveApiConfig() {
         const res = await fetch('/api/admin/api_config', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ deepseek_api_key: key, llm_backend: backend })
+            body: JSON.stringify(body)
         });
         const data = await res.json();
         if (data.ok) {
-            statusEl.textContent = '已保存。需要重启 FSM 和语音服务生效。';
+            statusEl.textContent = '已保存，正在重启语音服务以加载新凭证...';
             statusEl.style.color = 'var(--accent-green)';
-            showToast('API 配置已保存', '', false);
+            showToast('API 配置已保存', '自动重启语音中', false);
+            loadApiConfig();
+            // V4.8: auto-reload voice so BAIDU/DEEPSEEK keys take effect
+            setTimeout(reloadVoice, 500);
         } else {
             statusEl.textContent = '保存失败: ' + (data.error || '');
             statusEl.style.color = 'var(--accent-red)';
@@ -2009,9 +2345,330 @@ async function loadApiConfig() {
         const res = await fetch('/api/admin/api_config', { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
-        if (data.deepseek_api_key) document.getElementById('cfgApiKey').value = data.deepseek_api_key;
+        const fieldMap = {
+            deepseek_api_key: 'cfgApiKey',
+            BAIDU_APP_ID: 'cfgBaiduAppId',
+            BAIDU_API_KEY: 'cfgBaiduApiKey',
+            BAIDU_SECRET_KEY: 'cfgBaiduSecret',
+            FEISHU_APP_ID: 'cfgFeishuAppId',
+            FEISHU_APP_SECRET: 'cfgFeishuAppSecret',
+            FEISHU_CHAT_ID: 'cfgFeishuChatId',
+            FEISHU_WEBHOOK: 'cfgFeishuWebhook',
+            CLOUD_RTMPOSE_URL: 'cfgCloudUrl',
+        };
+        for (const key in fieldMap) {
+            const el = document.getElementById(fieldMap[key]);
+            if (!el) continue;
+            const val = data[key];
+            if (typeof val !== 'string') { el.value = ''; continue; }
+            if (val.indexOf('****') !== -1) {
+                el.value = '';
+                el.placeholder = '已保存 (' + val + ')';
+            } else {
+                el.value = val;
+            }
+        }
         if (data.llm_backend) document.getElementById('cfgLlmBackend').value = data.llm_backend;
     } catch(e) {}
+}
+
+async function testCloudConnectivity() {
+    var s = document.getElementById('cloudVerifyStatus');
+    s.textContent = '测试中...'; s.style.color = 'var(--text-muted)';
+    try {
+        var r = await fetch('/api/admin/cloud_verify', {cache:'no-store'});
+        var d = await r.json();
+        if (d.ok) {
+            s.textContent = '✓ 连通 ' + d.latency_ms + 'ms (' + (d.status||'ready') + ')';
+            s.style.color = 'var(--accent-green)';
+        } else {
+            s.textContent = '✗ ' + (d.error || '无法连接');
+            s.style.color = 'var(--accent-red)';
+        }
+    } catch(e) {
+        s.textContent = '✗ 请求失败: ' + e.message;
+        s.style.color = 'var(--accent-red)';
+    }
+}
+
+async function restartTunnel() {
+    var s = document.getElementById('cloudVerifyStatus');
+    s.textContent = '重启隧道中 (约 6 秒)...'; s.style.color = 'var(--text-muted)';
+    try {
+        var r = await fetch('/api/admin/reload_service', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({service: 'tunnel'})
+        });
+        var d = await r.json();
+        if (d.ok) {
+            s.textContent = '✓ 隧道已重启，自动测试连通...';
+            s.style.color = 'var(--accent-green)';
+            setTimeout(testCloudConnectivity, 2000);
+        } else {
+            s.textContent = '✗ 隧道重启失败: ' + (d.msg || d.error || '');
+            s.style.color = 'var(--accent-red)';
+        }
+    } catch(e) {
+        s.textContent = '✗ ' + e.message;
+        s.style.color = 'var(--accent-red)';
+    }
+}
+
+async function reloadVoice() {
+    var s = document.getElementById('apiConfigStatus');
+    s.textContent = '重启语音服务中...'; s.style.color = 'var(--text-muted)';
+    try {
+        var r = await fetch('/api/admin/reload_service', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({service: 'voice'})
+        });
+        var d = await r.json();
+        if (d.ok) {
+            s.textContent = '✓ ' + (d.msg || '语音服务已重启，百度凭证已生效');
+            s.style.color = 'var(--accent-green)';
+        } else {
+            s.textContent = '✗ ' + (d.error || '重启失败');
+            s.style.color = 'var(--accent-red)';
+        }
+    } catch(e) {
+        s.textContent = '✗ ' + e.message;
+        s.style.color = 'var(--accent-red)';
+    }
+}
+
+async function testVoice() {
+    var s = document.getElementById('voiceDiagStatus');
+    s.textContent = '正在播放测试语音 "你好，我是 IronBuddy 教练"...';
+    s.style.color = 'var(--text-muted)';
+    try {
+        var r = await fetch('/api/admin/voice_test', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({msg: '你好，我是 IronBuddy 教练，语音系统工作正常'})
+        });
+        var d = await r.json();
+        if (d.ok) {
+            var beep = d.beep_fallback ? '✓ ALSA 喇叭通路 OK' : '⚠ ALSA 未响应 (可能喇叭静音)';
+            s.textContent = '已发送测试语音\n' + beep + '\n注意听板子喇叭：\n• 有声 → 百度 TTS 通路 OK\n• 静音 → 检查百度凭证或 /api/admin/voice_diag';
+            s.style.color = 'var(--accent-green)';
+        } else {
+            s.textContent = '✗ 失败: ' + (d.error || '未知错误');
+            s.style.color = 'var(--accent-red)';
+        }
+    } catch(e) {
+        s.textContent = '✗ 请求失败: ' + e.message;
+        s.style.color = 'var(--accent-red)';
+    }
+}
+
+async function diagVoice() {
+    var s = document.getElementById('voiceDiagStatus');
+    s.textContent = '诊断中...'; s.style.color = 'var(--text-muted)';
+    try {
+        var r = await fetch('/api/admin/voice_diag', {cache:'no-store'});
+        var d = await r.json();
+        var lines = [];
+        lines.push((d.baidu_configured ? '✓' : '✗') + ' 百度凭证: ' +
+                   (d.baidu_configured ? ('已配置 (' + (d.baidu_app_id_head||'') + '...)') : '未配置 - 请填上方百度 3 个字段并点保存'));
+        lines.push((d.voice_running ? '✓' : '✗') + ' voice_daemon 进程: ' +
+                   (d.voice_running ? ('运行中 PID ' + (d.voice_pids || []).join(',')) : '未运行'));
+        lines.push('🔊 TTS 音量: ' + d.tts_volume + '/15');
+        if (d.alsa_playback_path) {
+            var pathVal = (d.alsa_playback_path.match(/values=(\w+)/) || [])[1] || '?';
+            lines.push('🔉 ALSA Playback Path: ' + pathVal + ' (应为 SPK 或 2)');
+        }
+        if (d.voice_log_tail && d.voice_log_tail.length) {
+            lines.push('--- 最近日志 ---');
+            d.voice_log_tail.forEach(function(l) { lines.push('  ' + l.substring(0, 100)); });
+        }
+        s.textContent = lines.join('\n');
+        s.style.color = d.baidu_configured && d.voice_running ? 'var(--accent-green)' : 'var(--accent-amber)';
+    } catch(e) {
+        s.textContent = '✗ 诊断失败: ' + e.message;
+        s.style.color = 'var(--accent-red)';
+    }
+}
+
+// ===== 视觉特征探测 (env-gated, 默认隐藏) =====
+var _probePollTimer = null;
+async function probeInitUi() {
+    // 启动时探测是否启用
+    try {
+        var r = await fetch('/api/probe/enabled', {cache:'no-store'});
+        var d = await r.json();
+        if (d && d.enabled) {
+            var box = document.getElementById('diagProbe');
+            if (box) box.style.display = '';
+            // 启动 2Hz 轮询
+            if (!_probePollTimer) {
+                _probePollTimer = setInterval(probeRefresh, 500);
+            }
+        }
+    } catch (e) {
+        // 接口不存在 / 未启用 - 静默忽略
+    }
+}
+async function probeStart() {
+    var s = document.getElementById('probeStatus');
+    s.textContent = '启动中...'; s.style.color = 'var(--text-muted)';
+    try {
+        var r = await fetch('/api/probe/start', {method:'POST', cache:'no-store'});
+        var d = await r.json();
+        if (d.ok) {
+            s.textContent = '✓ 探测运行中 (PID ' + (d.pid||'?') + ')';
+            s.style.color = 'var(--accent-green)';
+        } else {
+            s.textContent = '✗ 启动失败: ' + (d.error || 'unknown');
+            s.style.color = 'var(--accent-red)';
+        }
+    } catch (e) {
+        s.textContent = '✗ ' + e.message;
+        s.style.color = 'var(--accent-red)';
+    }
+}
+async function probeStop() {
+    var s = document.getElementById('probeStatus');
+    try {
+        await fetch('/api/probe/stop', {method:'POST', cache:'no-store'});
+        s.textContent = '已停止';
+        s.style.color = 'var(--text-muted)';
+    } catch (e) {
+        s.textContent = '✗ 停止失败: ' + e.message;
+        s.style.color = 'var(--accent-red)';
+    }
+}
+function _probeFmt(v, digits) {
+    if (v === null || v === undefined) return '--';
+    if (typeof v !== 'number') return String(v);
+    return v.toFixed(digits || 0);
+}
+var _probeLabelMap = {
+    'squat_standard':     {short:'深蹲-标', color:'#34d399'},
+    'squat_compensating': {short:'深蹲-代', color:'#fbbf24'},
+    'squat_non_standard': {short:'深蹲-错', color:'#fb7185'},
+    'curl_standard':      {short:'弯举-标', color:'#34d399'},
+    'curl_compensating':  {short:'弯举-代', color:'#fbbf24'},
+    'curl_non_standard':  {short:'弯举-错', color:'#fb7185'},
+    'unlabeled':          {short:'(未标)', color:'var(--text-muted)'}
+};
+async function probeSetLabel(label) {
+    try {
+        var r = await fetch('/api/probe/set_label', {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({label: label}), cache:'no-store'
+        });
+        var d = await r.json();
+        if (d.ok) {
+            var el = document.getElementById('probeCurLabel');
+            if (el) {
+                el.textContent = label;
+                var info = _probeLabelMap[label] || {color:'var(--text-primary)'};
+                el.style.color = info.color;
+            }
+            // 高亮当前按钮
+            document.querySelectorAll('.probe-lbl-btn').forEach(function(b) {
+                if (b.dataset.label === label) {
+                    b.style.border = '2px solid var(--accent-teal)';
+                    b.style.background = 'rgba(52,211,153,0.15)';
+                } else {
+                    b.style.border = '';
+                    b.style.background = '';
+                }
+            });
+        }
+    } catch (e) { /* 静默 */ }
+}
+async function probeClear() {
+    if (!confirm('清空所有已采集的 rep 数据?')) return;
+    try {
+        await fetch('/api/probe/clear', {method:'POST', cache:'no-store'});
+    } catch (e) {}
+}
+function probeCopyCsv() {
+    // 从当前表格构造 CSV 复制到剪贴板
+    var state = window._probeLastState;
+    if (!state || !state.features || !state.features.length) {
+        alert('暂无数据');
+        return;
+    }
+    var header = 'rep_idx,label,exercise,min_angle,max_angle,peak_vel_desc,peak_vel_asc,peak_accel,duration,trunk_min,shoulder_disp,fsm_good,fsm_failed,fsm_comp,sample_n';
+    var rows = state.features.map(function(f) {
+        return [f.rep_idx, f.label||'', f.exercise||'', f.min_angle, f.max_angle,
+                f.peak_vel_desc, f.peak_vel_asc, f.peak_accel, f.duration,
+                f.trunk_min==null?'':f.trunk_min, f.shoulder_disp==null?'':f.shoulder_disp,
+                f.fsm_good||0, f.fsm_failed||0, f.fsm_comp||0, f.sample_n||0].join(',');
+    });
+    var csv = header + '\n' + rows.join('\n');
+    if (navigator.clipboard) {
+        navigator.clipboard.writeText(csv).then(function() {
+            alert('CSV 已复制到剪贴板 (' + state.features.length + ' rows). 粘到聊天窗口贴给 AI');
+        }, function(e) { prompt('复制失败, 手动复制:', csv); });
+    } else {
+        prompt('复制下面内容:', csv);
+    }
+}
+async function probeRefresh() {
+    try {
+        var r = await fetch('/api/probe/state', {cache:'no-store'});
+        var d = await r.json();
+        if (!d.enabled) return;
+        window._probeLastState = d;
+        var s = document.getElementById('probeStatus');
+        if (s && s.textContent.indexOf('启动中') < 0) {
+            if (d.running) {
+                s.textContent = '✓ 运行中 (PID ' + (d.pid||'?') + ') · 已捕获 ' + (d.features||[]).length + ' rep';
+                s.style.color = 'var(--accent-green)';
+            } else {
+                if (!s.textContent || s.textContent === '—' || s.textContent.indexOf('已停止') >= 0) {
+                    s.textContent = '— (未运行)';
+                    s.style.color = 'var(--text-muted)';
+                }
+            }
+        }
+        // 同步当前 label 显示
+        var cur = d.current_label || 'unlabeled';
+        var el = document.getElementById('probeCurLabel');
+        if (el && el.textContent !== cur) {
+            el.textContent = cur;
+            var info = _probeLabelMap[cur] || {color:'var(--text-primary)'};
+            el.style.color = info.color;
+        }
+        var tbody = document.getElementById('probeTableBody');
+        if (!tbody) return;
+        var feats = (d.features || []).slice().reverse();
+        if (!feats.length) {
+            tbody.innerHTML = '<tr><td colspan="10" style="color:var(--text-muted);text-align:center;padding:12px">等待 rep 完成...</td></tr>';
+            return;
+        }
+        var html = feats.map(function(f) {
+            var lbl = f.label || 'unlabeled';
+            var lblInfo = _probeLabelMap[lbl] || {short:lbl, color:'var(--text-muted)'};
+            var vel_asc_style = f.peak_vel_asc > 250 ? 'color:#fb7185;font-weight:600' : '';
+            var vel_desc_style = f.peak_vel_desc > 250 ? 'color:#fb7185;font-weight:600' : '';
+            var accel_style = f.peak_accel > 3000 ? 'color:#fbbf24' : '';
+            return '<tr>' +
+                '<td style="padding:1px 4px;">' + (f.rep_idx||'?') + '</td>' +
+                '<td style="color:' + lblInfo.color + ';font-size:10px;">' + lblInfo.short + '</td>' +
+                '<td>' + (f.exercise === 'bicep_curl' ? '弯举' : '深蹲') + '</td>' +
+                '<td style="text-align:right">' + _probeFmt(f.min_angle, 1) + '</td>' +
+                '<td style="text-align:right">' + _probeFmt(f.max_angle, 1) + '</td>' +
+                '<td style="text-align:right;' + vel_desc_style + '">' + _probeFmt(f.peak_vel_desc, 0) + '</td>' +
+                '<td style="text-align:right;' + vel_asc_style + '">' + _probeFmt(f.peak_vel_asc, 0) + '</td>' +
+                '<td style="text-align:right;' + accel_style + '">' + _probeFmt(f.peak_accel, 0) + '</td>' +
+                '<td style="text-align:right">' + _probeFmt(f.duration, 1) + 's</td>' +
+                '<td style="text-align:right">' + _probeFmt(f.trunk_min, 0) + '</td>' +
+            '</tr>';
+        }).join('');
+        tbody.innerHTML = html;
+    } catch (e) { /* 静默 */ }
+}
+// 页面启动时触发一次
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', probeInitUi);
+} else {
+    probeInitUi();
 }
 
 async function submitProfileModal() {
@@ -2051,7 +2708,9 @@ async function loadServices() {
         if (!res.ok) return;
         const data = await res.json();
         const container = document.getElementById('serviceList');
+        const centerC = document.getElementById('serviceListCenter');
         let html = '';
+        let miniHtml = '';
         const boardOnline = data.board_online;
         const sbBoard = document.getElementById('sbBoard');
 
@@ -2059,6 +2718,7 @@ async function loadServices() {
             if (sbBoard) { sbBoard.textContent = '离线'; sbBoard.style.color = 'var(--accent-red)'; }
             for (const name of Object.keys(SVC_CN)) {
                 html += '<div class="svc-card"><div class="svc-dot off"></div><div class="svc-name">' + SVC_CN[name] + '</div><div class="svc-pid">板端离线</div></div>';
+                miniHtml += '<div class="svc-mini"><span class="svc-mini-dot off"></span><span class="svc-mini-name">' + SVC_CN[name] + '</span></div>';
             }
         } else {
             if (sbBoard) { sbBoard.textContent = '在线'; sbBoard.style.color = 'var(--accent-green)'; }
@@ -2067,9 +2727,11 @@ async function loadServices() {
                 const dotCls = running ? 'on' : 'off';
                 const pidText = running ? 'PID ' + info.pid : '未运行';
                 html += '<div class="svc-card"><div class="svc-dot ' + dotCls + '"></div><div class="svc-name">' + (SVC_CN[name] || name) + '</div><div class="svc-pid">' + pidText + '</div></div>';
+                miniHtml += '<div class="svc-mini"><span class="svc-mini-dot ' + dotCls + '"></span><span class="svc-mini-name">' + (SVC_CN[name] || name) + '</span></div>';
             }
         }
-        container.innerHTML = html;
+        if (container) container.innerHTML = html;
+        if (centerC) centerC.innerHTML = miniHtml;
     } catch(e) {}
 }
 
@@ -2132,6 +2794,38 @@ async function adminStop() {
     } catch(e) {
         out.textContent = '请求失败: ' + e;
     }
+    // Clear residual frontend state (EMG history, chat, stat counters)
+    try {
+        if (window.emgHistory) {
+            // V7.16 streaming: 清零时用 0 预填满 MAX_POINTS 个点, 保持铺满宽度
+            var _mp = (typeof EMG_MAX_POINTS === 'number') ? EMG_MAX_POINTS : 200;
+            Object.keys(window.emgHistory).forEach(function(k) {
+                window.emgHistory[k] = new Array(_mp).fill(0);
+            });
+            var canvasEl = document.getElementById('emgCanvas');
+            if (canvasEl) {
+                var cctx = canvasEl.getContext('2d');
+                if (cctx) cctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+            }
+        }
+        var chatArea = document.getElementById('chatArea');
+        if (chatArea) chatArea.innerHTML = '<div class="chat-placeholder" id="chatPlaceholder">等待教练总结...</div>';
+        ['statGood','statFailed','statComp','statFatigue','timerValue','romCenterAngle','hudAngle','ampText'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = (id === 'timerValue') ? '00:00' : ((id === 'romCenterAngle') ? '0\u00B0' : ((id === 'ampText') ? '0\u00B0' : ((id === 'statComp' || id === 'statGood' || id === 'statFailed' || id === 'statFatigue') ? '0' : '--')));
+        });
+        document.querySelectorAll('.rep-count').forEach(function(el) { el.textContent = '0'; });
+        var ampCircle = document.getElementById('ampCircle');
+        if (ampCircle) ampCircle.style.strokeDashoffset = '251.2';
+        var nnCircle = document.getElementById('nnCircle');
+        if (nnCircle) nnCircle.style.strokeDashoffset = '251.2';
+        
+        // V4.6 强制复位骨骼
+        if (window.renderWebGl) {
+            if (window._currentAngles) { Object.keys(window._currentAngles).forEach(k => window._currentAngles[k] = 180); }
+            window.renderWebGl();
+        }
+    } catch(e) {}
     btn.disabled = false; btn.innerHTML = '&#9632; 一键停止';
     setTimeout(loadServices, 1500);
     setTimeout(loadServices, 3000);
@@ -2293,6 +2987,8 @@ async function loadModelInfo() {
 // REAL-TIME POLLING (Web Worker)
 // ========================================================
 const workerCode = `
+    // V7.5: 轮询 500ms → 150ms（骨架/HUD 从 2Hz 提到 ~6.7Hz，与 CSS transition 0.15s 对齐，完全消除“动-停”感）
+    // V7.5: 剥离 voice_debug fetch —— 原来每轮串联拉取但主线程从未使用（dead fetch），白白吃带宽
     let timer = null;
     self.onmessage = function(e) {
         if (e.data === 'START') {
@@ -2302,28 +2998,18 @@ const workerCode = `
                     const res = await fetch(location.origin + '/state_feed', { cache: 'no-store' });
                     if (!res.ok) throw new Error();
                     const d = await res.json();
-                    let voiceDebug = null;
-                    try {
-                        const vRes = await fetch(location.origin + '/api/voice_debug', { cache: 'no-store' });
-                        if (vRes.ok) voiceDebug = await vRes.json();
-                    } catch(e) {}
-                    self.postMessage({ type: 'DATA', payload: { d, voiceDebug } });
+                    self.postMessage({ type: 'DATA', payload: { d } });
                 } catch(err) {
                     self.postMessage({ type: 'ERROR' });
                 }
-            }, 500);
+            }, 100);
         } else if (e.data === 'FORCE') {
             (async () => {
                 try {
                     const res = await fetch(location.origin + '/state_feed', { cache: 'no-store' });
                     if (res.ok) {
                         const d = await res.json();
-                        let voiceDebug = null;
-                        try {
-                            const vRes = await fetch(location.origin + '/api/voice_debug', { cache: 'no-store' });
-                            if (vRes.ok) voiceDebug = await vRes.json();
-                        } catch(e) {}
-                        self.postMessage({ type: 'DATA', payload: { d, voiceDebug } });
+                        self.postMessage({ type: 'DATA', payload: { d } });
                     }
                 } catch(e) {}
             })();
@@ -2336,7 +3022,7 @@ const syncWorker = new Worker(URL.createObjectURL(blob));
 
 syncWorker.onmessage = function(e) {
     if (e.data.type === 'DATA') {
-        const { d, voiceDebug } = e.data.payload;
+        const { d } = e.data.payload;
 
         // FSM state
         const stateInfo = STATE_MAP[d.state] || STATE_MAP['NO_PERSON'];
@@ -2350,29 +3036,23 @@ syncWorker.onmessage = function(e) {
         const isCurl = d.exercise === 'bicep_curl';
         _setText('statGoodLabel', isCurl ? '标准弯举' : '标准深蹲');
         _setText('statFailedLabel', isCurl ? '违规弯举' : '违规半蹲');
-        _setText('hudAngleLabel', isCurl ? '肘关节角度' : '膝盖角度');
+        _setText('hudAngleLabel', '角度');
 
-        // Sprint5.3: 深蹲模式隐藏 EMG(纯视觉), 弯举模式显示 EMG(多模态)
-        // 后端代码不变, 仅前端按 exercise 切显示
-        var emgSec = document.getElementById('emgSection');
-        if (emgSec) emgSec.style.display = isCurl ? '' : 'none';
+        // Sprint5.3 -> V4.6: EMG 波形转为全天候全局驻留组件，已移除显隐条件控制
 
         // Sync exercise pills from FSM
         document.querySelectorAll('#exercisePills .pill-btn').forEach(b => {
             b.classList.toggle('active', b.getAttribute('data-ex') === d.exercise);
         });
 
-        // Stats
-        _setText('statGood', d.good);
-        _setText('statFailed', d.failed);
+        // V7.17 (2026-04-20): 计数队列化 —— 真实计数入队，显示计数仅由 300ms tick 逐格推进
+        var compFromBackend = (typeof d.comp === 'number' && d.comp >= 0) ? d.comp : 0;
+        _enqueueRepEvents(d.good || 0, d.failed || 0, compFromBackend);
+        _compCount = _displayedComp;                 // 保留旧变量只为兼容
+        _lastRepTotal = _displayedGood + _displayedFailed + _displayedComp;
+        _renderStatsFromDisplay();
         _setText('hudAngle', d.angle > 0 ? d.angle + '\u00B0' : '--');
-        _setText('statAngle', d.angle > 0 ? d.angle + '\u00B0' : '--');
-
-        const total = d.good + d.failed;
-        const rateText = total > 0 ? Math.round((d.good / total) * 100) + '%' : '--';
-        _setText('statRate', rateText);
-        _setText('sbReps', total);
-        _setText('sbRate', rateText);
+        _setText('romCenterAngle', d.angle > 0 ? d.angle + '\u00B0' : '0\u00B0');
 
         // ROM gauge
         let ampPct = 0;
@@ -2387,7 +3067,11 @@ syncWorker.onmessage = function(e) {
             ampCircle.style.strokeDashoffset = 251.2 - (251.2 * ampPct / 100);
             const ampCol = ampPct >= 100 ? 'var(--accent-green)' : ampPct > 60 ? 'var(--accent-amber)' : 'var(--accent-blue)';
             ampCircle.style.stroke = ampCol;
-            if (ampText) { ampText.textContent = Math.round(ampPct) + '%'; ampText.style.color = ampCol; }
+            if (ampText) {
+                var _angleShow = (typeof d.angle === 'number' && d.angle > 0) ? d.angle.toFixed(1) + '\u00B0' : '0\u00B0';
+                ampText.textContent = _angleShow;
+                ampText.style.color = ampCol;
+            }
         }
 
         // NN gauge
@@ -2426,6 +3110,24 @@ syncWorker.onmessage = function(e) {
             fBar.style.background = currentFatigue >= fatigueLimit ? 'var(--accent-red)' : currentFatigue > fThresh1 ? '#f97316' : 'var(--accent-purple)';
         }
 
+        // Live fatigue-target display (reads from server d.fatigue_limit directly)
+        var ft = document.getElementById('fatigueTargetDisplay');
+        if (ft) ft.textContent = String(fatigueLimit);
+
+        // V7.11 跨组累计 -> 底部状态栏
+        if (typeof d.total_good === 'number')   _setText('sbTotalGood', d.total_good);
+        if (typeof d.total_failed === 'number') _setText('sbTotalFailed', d.total_failed);
+        if (typeof d.total_comp === 'number')   _setText('sbTotalComp', d.total_comp);
+
+        // Track FSM classification for rig status labels
+        if (d.classification) _lastClassification = d.classification;
+
+        // V7.16: 删除 V7.6 的 BOTTOM/TOP state 触发块 —— FSM 从未发射这两个状态, 为死代码
+        // 浮卡唯一触发路径 = updateRig 内 counter 递增 (V7.16 服务端消抖后只在真 rep 末端递增)
+
+        // V7.9: 移除 UI 自动 reset —— 抢在 FSM 触发 DeepSeek 前清零会导致总结丢失
+        // FSM 自己在 should_trigger 后会清零 fsm.total_fatigue_volume
+
         // T2: sync mute icon from voice daemon state (d.muted), one-way server→UI
         if (typeof d.muted === 'boolean') {
             const mb = document.getElementById('muteBtn');
@@ -2445,8 +3147,14 @@ syncWorker.onmessage = function(e) {
             fatInput.value = fatigueLimit;
         }
 
-        // Kinematics rig (T2: pass fatigue limit)
-        updateRig(d.angle, d.exercise, currentFatigue, d.good || 0, d.failed || 0, fatigueLimit);
+        // V7.15: 新一次动作开始 (进入 DESCENDING/CURLING) 重置 EMG 波形窗口, 只显示当前动作
+        if (typeof window._emgMaybeResetForNewRep === 'function') {
+            window._emgMaybeResetForNewRep(d.state);
+        }
+
+        // Kinematics rig (T2: pass fatigue limit) —— V7.6: 传入平滑后的角度消除 NPU 抖动
+        // V7.17 (2026-04-20): 传入 displayed 计数（由队列 tick 逐格推进）—— updateRig 内部 diff 每次看到 +1, 骨架 flash 和左栏 +1 物理同步
+        updateRig(filterAngleForRig(d.angle), d.exercise, currentFatigue, _displayedGood, _displayedFailed, fatigueLimit, _displayedComp);
 
         // Connection OK
         if (!connectionAlive) {
@@ -2471,9 +3179,129 @@ document.addEventListener('visibilitychange', () => {
 
 
 // ===== Kinematics Rig =====
-let _rigLastGood = 0, _rigLastFailed = 0;
+let _rigLastGood = 0, _rigLastFailed = 0, _rigLastComp = 0;
+let _lastClassification = null;
+var _lastFatigueReset = 0;
+// 代偿累计（FSM 仅暴露瞬时 classification，前端本地累加）
+let _compCount = 0, _lastRepTotal = 0;
 
-function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit) {
+// V7.17 (2026-04-20): Rep 事件队列 —— 保证骨架 flash 与左栏计数 1:1 同步，后端瞬涨多格也被 300ms 节流逐格播放
+let _displayedGood = 0, _displayedFailed = 0, _displayedComp = 0;
+const _repEventQueue = [];  // 元素: 'good' | 'failed' | 'comp'
+
+function _queuePendingOf(kind) {
+    var n = 0;
+    for (var i = 0; i < _repEventQueue.length; i++) if (_repEventQueue[i] === kind) n++;
+    return n;
+}
+function _enqueueRepEvents(good, failed, comp) {
+    // Reset 守卫：后端下降（session 清零 / 疲劳满重置）→ 清队列 + 快速同步
+    if (good < _displayedGood)     { _displayedGood = good;     _repEventQueue.length = 0; }
+    if (failed < _displayedFailed) { _displayedFailed = failed; _repEventQueue.length = 0; }
+    if (comp < _displayedComp)     { _displayedComp = comp;     _repEventQueue.length = 0; }
+    // 真增量 = 后端 − 已显示 − 已排队
+    var dG = good   - _displayedGood   - _queuePendingOf('good');
+    var dF = failed - _displayedFailed - _queuePendingOf('failed');
+    var dC = comp   - _displayedComp   - _queuePendingOf('comp');
+    for (var i = 0; i < dG; i++) _repEventQueue.push('good');
+    for (var j = 0; j < dF; j++) _repEventQueue.push('failed');
+    for (var k = 0; k < dC; k++) _repEventQueue.push('comp');
+}
+function _renderStatsFromDisplay() {
+    var total = _displayedGood + _displayedFailed + _displayedComp;
+    _setText('statGood',   _displayedGood);
+    _setText('statFailed', _displayedFailed);
+    _setText('statComp',   _displayedComp);
+    _setText('sbReps',     total);
+    _setText('sbComp',     _displayedComp);
+}
+// 每 300ms 弹一个事件 —— 显示计数 +1, 并通过下轮 poll 让 updateRig 触发骨架 flash
+setInterval(function() {
+    if (_repEventQueue.length === 0) return;
+    var ev = _repEventQueue.shift();
+    if      (ev === 'good')   _displayedGood++;
+    else if (ev === 'failed') _displayedFailed++;
+    else if (ev === 'comp')   _displayedComp++;
+    _renderStatsFromDisplay();
+    // 立即强拉一次 poll → updateRig 看到 +1 delta 立刻放 flash (visually atomic)
+    try { syncWorker.postMessage('FORCE'); } catch(e) {}
+}, 300);
+
+// V7.4: 肌肉瞬时闪光状态（到位瞬间 450ms 内强制覆盖底色）
+let _muscleFlashUntil = 0;
+let _muscleFlashType = null;
+
+// V7.6: flash 去重窗口（V7.16: 删除 _lastFsmState — 死代码清理）
+let _lastFlashTime = 0;
+
+// V7.17.1: 回退 V7.16 过严过滤（速度钳位 + median5 + α0.3 在云端正常动作下会锁死骨架）
+// 保留 V7.6 轻度 median(3) + EMA α=0.5, 丝滑但不锁 —— 云端 RTMPose 已经足够干净
+let _rigAngleBuf = [];
+let _rigEmaAngle = null;
+function filterAngleForRig(raw) {
+    if (typeof raw !== 'number' || raw <= 0) return raw;
+    _rigAngleBuf.push(raw);
+    if (_rigAngleBuf.length > 3) _rigAngleBuf.shift();
+    var mid = raw;
+    if (_rigAngleBuf.length === 3) {
+        var s = _rigAngleBuf.slice().sort(function(a,b){ return a-b; });
+        mid = s[1];   // 中值 —— 只剔除单帧异常
+    }
+    if (_rigEmaAngle == null) _rigEmaAngle = mid;
+    _rigEmaAngle = 0.5 * mid + 0.5 * _rigEmaAngle;   // 轻度 EMA 低通
+    return _rigEmaAngle;
+}
+
+// V7.6: 统一 flash 调度器 —— state 触发与 counter 触发共用，300ms 去重
+function triggerFlash(flash, classification, delta) {
+    var now = Date.now();
+    if (now - _lastFlashTime < 300) return;
+    _lastFlashTime = now;
+    _muscleFlashUntil = now + 450;
+    _muscleFlashType = flash;
+    showRigFlash(flash, classification, delta);
+}
+
+// V7.4: 灰 → 血红 线性插值（疲劳越高，肌肉越暗红）
+function _rigLerpColor(a, b, t) {
+    t = Math.max(0, Math.min(1, t));
+    return 'rgb(' + Math.round(a[0] + (b[0]-a[0])*t) + ',' +
+                    Math.round(a[1] + (b[1]-a[1])*t) + ',' +
+                    Math.round(a[2] + (b[2]-a[2])*t) + ')';
+}
+// 顶/底色锚点
+var _RIG_C_GRAY_TOP = [148,163,184];   // #94a3b8
+var _RIG_C_GRAY_BOT = [71,85,105];     // #475569
+var _RIG_C_RED_TOP  = [239,68,68];     // #ef4444
+var _RIG_C_RED_BOT  = [127,29,29];     // #7f1d1d
+
+// V7.4: 到位瞬间弹出浮卡「标准/不标准/代偿」
+// V7.5: 支持 delta —— 同一 poll 多计数时展示 +N（保持与 rep 物理到位零时差，无 stagger）
+function showRigFlash(flash, classification, delta) {
+    var el = document.getElementById('rigFlash');
+    if (!el) return;
+    var n = (typeof delta === 'number' && delta > 0) ? delta : 1;
+    var tag = ' +' + n;
+    var text = tag, color = '#00d4aa';
+    if (flash === 'good') {
+        if (classification === 'compensating') { text = '代偿' + tag; color = '#ffa502'; }
+        else if (classification === 'non_standard') { text = '不标准' + tag; color = '#ff4757'; }
+        else { text = '标准' + tag; color = '#00d4aa'; }
+    } else {
+        text = '不标准' + tag;
+        color = '#ff4757';
+    }
+    el.textContent = text;
+    el.style.color = color;
+    el.style.boxShadow = '0 0 36px ' + color + '55, inset 0 0 18px rgba(0,0,0,0.6)';
+    // 重启动画
+    el.classList.remove('rig-flash-anim');
+    void el.offsetWidth;
+    el.classList.add('rig-flash-anim');
+}
+
+function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit, comp) {
+    // V7.15: comp 参数新加; 代偿时 good/failed 不增, 用 comp 增长独立触发 flash
     if (typeof angle !== 'number' || angle < 0) return;
     const body = document.getElementById('rigBody');
     const thigh = document.getElementById('rigThigh');
@@ -2490,13 +3318,59 @@ function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit) {
     const fColor = 'rgb(' + fr + ',' + fg + ',' + fb + ')';
     const fShadow = '0 0 ' + (12 + fp * 25) + 'px rgba(' + fr + ',' + fg + ',' + fb + ',' + (0.3 + fp * 0.4) + ')';
 
+    var _actsRef = (typeof _latestActs === 'object' && _latestActs) ? _latestActs : {};
+    var emgSel = (exercise === 'bicep_curl') ? (_actsRef.biceps || 0) : (_actsRef.quadriceps || 0);
+    emgSel = Math.max(0, Math.min(100, emgSel));
+    var emgAlpha = 0.3 + (emgSel / 100) * 0.6;
+    var blurPx = 12 + fp * 25 + emgSel * 0.3;
+    var muscleShadow = '0 0 ' + blurPx + 'px rgba(' + fr + ',' + fg + ',' + fb + ',' + emgAlpha.toFixed(2) + ')';
+
+    // V7.6: reset 守卫 —— 板端 session 清零或 fatigue 达标自动重置后，前端计数同步下修，防止 _rigLast* 卡在旧高水位
+    if (good < _rigLastGood) _rigLastGood = good;
+    if (failed < _rigLastFailed) _rigLastFailed = failed;
+    var compVal = (typeof comp === 'number' && comp >= 0) ? comp : 0;
+    if (compVal < _rigLastComp) _rigLastComp = compVal;
+
     let flash = null;
-    if (good > _rigLastGood) { flash = 'good'; _rigLastGood = good; }
-    if (failed > _rigLastFailed) { flash = 'bad'; _rigLastFailed = failed; }
+    let flashDelta = 0;
+    if (good > _rigLastGood)   { flash = 'good'; flashDelta = good - _rigLastGood; _rigLastGood = good; }
+    if (failed > _rigLastFailed) { flash = 'bad';  flashDelta = failed - _rigLastFailed; _rigLastFailed = failed; }
+    // V7.15: 代偿独立触发 flash (muscle 会因 _lastClassification='compensating' 染黄色)
+    if (compVal > _rigLastComp) {
+        flash = 'good';  // 使用 good 分支: muscleFlashType=good + _lastClassification=compensating → 黄色
+        flashDelta = compVal - _rigLastComp;
+        _rigLastComp = compVal;
+    }
+
+    // V7.4+V7.6: counter 递增触发 flash（与 state 触发共用 300ms 去重，避免重复 flash 叠图）
+    if (flash) {
+        triggerFlash(flash, _lastClassification, flashDelta);
+    }
+
+    // V7.4: 当前肌肉底色 = 灰↔红 按 (疲劳% + EMG 加成) 插值
+    var effT = Math.min(1, fp + (emgSel / 100) * 0.25);
+    var mTop = _rigLerpColor(_RIG_C_GRAY_TOP, _RIG_C_RED_TOP, effT);
+    var mBot = _rigLerpColor(_RIG_C_GRAY_BOT, _RIG_C_RED_BOT, effT);
+    var muscleGrad = 'linear-gradient(180deg, ' + mTop + ', ' + mBot + ')';
+    // flash 窗口内强制覆盖（绿=标准/黄=代偿/红=不标准）
+    if (Date.now() < _muscleFlashUntil) {
+        if (_muscleFlashType === 'good') {
+            if (_lastClassification === 'compensating') muscleGrad = 'linear-gradient(180deg, #fbbf24, #b45309)';
+            else if (_lastClassification === 'non_standard') muscleGrad = 'linear-gradient(180deg, #fb7185, #be123c)';
+            else muscleGrad = 'linear-gradient(180deg, #34d399, #059669)';
+        } else {
+            muscleGrad = 'linear-gradient(180deg, #fb7185, #be123c)';
+        }
+    }
 
     if (exercise === 'bicep_curl') {
         if (thigh) thigh.style.opacity = '0.1';
-        if (upperArm) { upperArm.style.opacity = '1'; upperArm.style.boxShadow = fShadow; }
+        if (upperArm) {
+            upperArm.style.opacity = '1';
+            upperArm.style.boxShadow = muscleShadow;
+            upperArm.style.background = muscleGrad;           // V7.4: 疲劳渐变
+        }
+        if (forearm) forearm.style.background = muscleGrad;  // V7.4
         if (body) body.style.transform = 'translateX(-50%) translateY(0px) rotateZ(0deg)';
         const curlRatio = Math.min(1, Math.max(0, (150 - angle) / 100));
         if (upperArm) upperArm.style.transform = 'rotateZ(-10deg)';
@@ -2507,7 +3381,12 @@ function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit) {
             else { glow.style.boxShadow = curlRatio > 0.6 ? '0 0 40px 15px rgba(' + fr + ',' + fg + ',' + fb + ',' + (0.2 + fp * 0.4) + ')' : '0 0 12px 4px rgba(' + fr + ',' + fg + ',' + fb + ',0.1)'; }
         }
     } else {
-        if (thigh) { thigh.style.opacity = '1'; thigh.style.boxShadow = fShadow; }
+        if (thigh) {
+            thigh.style.opacity = '1';
+            thigh.style.boxShadow = muscleShadow;
+            thigh.style.background = muscleGrad;             // V7.4: 疲劳渐变
+        }
+        if (calf) calf.style.background = muscleGrad;        // V7.4
         if (upperArm) upperArm.style.opacity = '0';
         const bend = Math.max(0, 180 - angle);
         const sq = Math.min(1, bend / 110);
@@ -2523,9 +3402,23 @@ function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit) {
     // Status text update
     var st = document.getElementById('rigStatusText');
     if (st) {
-        if (flash === 'good') { st.textContent = '好球!'; st.style.color = 'var(--accent-green)'; }
-        else if (flash === 'bad') { st.textContent = '注意姿势!'; st.style.color = 'var(--accent-red)'; }
-        else { st.textContent = '疲劳 ' + Math.round(fatigue); st.style.color = fColor; }
+        if (flash === 'good') {
+            var lbl = '标准';
+            if (_lastClassification === 'compensating') lbl = '代偿';
+            else if (_lastClassification === 'non_standard') lbl = '不标准';
+            st.textContent = lbl + ' +1';
+            st.style.color = _lastClassification === 'standard' ? 'var(--accent-green)' :
+                             _lastClassification === 'compensating' ? 'var(--accent-amber)' :
+                             _lastClassification === 'non_standard' ? 'var(--accent-red)' :
+                             'var(--accent-green)';
+        } else if (flash === 'bad') {
+            st.textContent = '不标准 +1';
+            st.style.color = 'var(--accent-red)';
+        } else {
+            var _fLimUI = (typeof fatigueLimit === 'number' && fatigueLimit > 0) ? fatigueLimit : 1500;
+            st.textContent = '疲劳 ' + Math.round(fatigue) + '/' + _fLimUI;
+            st.style.color = fColor;
+        }
     }
 }
 
@@ -2540,7 +3433,7 @@ function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit) {
     var fpsStart = Date.now();
 
     // Build stream URL: same host, port 8080
-    var host = window.location.hostname || '10.105.245.224';
+    var host = window.location.hostname || '10.18.76.224';
     var directUrl = 'http://' + host + ':8080/stream';
     var fallbackUrl = '/video_feed';
     var useDirectStream = true;
@@ -2597,6 +3490,12 @@ function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit) {
 
 // ===== Chat Feed Polling =====
 // DeepSeek training reply
+var dsHistorySeen = {};
+function appendDsHistory(reply) {
+    // Unified chat panel: appendChatBubble already handles rendering into #chatArea.
+    // This function is kept as a no-op so existing call sites don't break.
+    return;
+}
 setInterval(async () => {
     try {
         const res = await fetch('/llm_reply_feed', { cache: 'no-store' });
@@ -2605,38 +3504,48 @@ setInterval(async () => {
         if (d.reply && d.reply.trim().length > 0 && d.reply !== lastReply) {
             const btn = document.getElementById('btnSumm');
             if (btn) { btn.disabled = false; btn.innerHTML = '&#128221; 生成点评'; btn.style.opacity = '1'; }
+            if (deepseekTimeoutId) { clearTimeout(deepseekTimeoutId); deepseekTimeoutId = null; }
             lastReply = d.reply;
             appendChatBubble('教练 (总结)', d.reply, 'bot');
+            if (!dsHistorySeen[d.reply]) {
+                dsHistorySeen[d.reply] = true;
+                appendDsHistory(d.reply);
+            }
         }
     } catch(e) {}
 }, 2000);
 
-// Chat reply + user input + draft
+// V7.7: 合并 chat_reply / chat_input 按 mtime 排序 append, 修复气泡顺序倒置
 setInterval(async () => {
+    let newItems = [];
     try {
         const res = await fetch('/api/chat_reply', { cache: 'no-store' });
         if (res.ok) {
             const d = await res.json();
             if (d.reply && d.ts > lastChatReplyTs) {
+                newItems.push({ ts: d.ts, role: '教练', text: d.reply, type: 'bot' });
                 lastChatReplyTs = d.ts;
-                appendChatBubble('教练', d.reply, 'bot');
             }
         }
     } catch(e) {}
-
     try {
         const res = await fetch('/api/chat_input', { cache: 'no-store' });
         if (res.ok) {
             const d = await res.json();
             if (d.text && d.ts > lastChatInputTs) {
+                newItems.push({ ts: d.ts, role: '我', text: d.text, type: 'user' });
                 lastChatInputTs = d.ts;
                 lastDraft = '';
                 const dn = document.getElementById('draftBubble');
                 if (dn) dn.remove();
-                appendChatBubble('我', d.text, 'user');
             }
         }
     } catch(e) {}
+    // V7.7: 按 mtime 升序 append, 保证"我"先于"教练"
+    newItems.sort((a, b) => a.ts - b.ts);
+    for (const item of newItems) {
+        appendChatBubble(item.role, item.text, item.type);
+    }
 
     try {
         const res = await fetch('/api/chat_draft', { cache: 'no-store' });
@@ -2667,12 +3576,24 @@ setInterval(async () => {
 }, 3000);
 
 
-// ===== EMG Waveform Engine =====
-var emgHistory = { quadriceps: [], glutes: [], calves: [], biceps: [] };
-var EMG_MAX_POINTS = 60;
+// ===== EMG Waveform Engine (V7.16: streaming 心跳图模式, 铺满宽度不中断) =====
+// V7.15 曾用 "进入 DESCENDING 清空" 的 scope 模式, 但清空后 array 从 0 重填,
+// 在铺满 MAX_POINTS 之前曲线只占画布左侧小部分. V7.16 改为永不清空的 streaming:
+//   - 初始化时 0 预填满 MAX_POINTS 个点 -> 一开机曲线就铺满宽度
+//   - 每次新采样 shift 最老 + push 最新 -> 保持 MAX_POINTS 个点
+//   - 绘图 x = (i / (MAX_POINTS - 1)) * W -> 永远铺满 canvas 宽度
+var EMG_MAX_POINTS = 200;          // V7.16: 100 -> 200 @10Hz = 20s 滑动窗口
+var emgHistory = {
+    quadriceps: new Array(EMG_MAX_POINTS).fill(0),
+    glutes:     new Array(EMG_MAX_POINTS).fill(0),
+    calves:     new Array(EMG_MAX_POINTS).fill(0),
+    biceps:     new Array(EMG_MAX_POINTS).fill(0),
+};
 var EMG_COLORS = { quadriceps: '#00d4aa', glutes: '#60a5fa', calves: '#ffa502', biceps: '#a78bfa' };
 var EMG_LABELS = { quadriceps: '股四头肌', glutes: '臀肌', calves: '小腿', biceps: '肱二头肌' };
 var emgHasRealSensor = false;
+// V7.16 取消 scope 重置, 保留 API 以防其他地方调用 (no-op)
+window._emgMaybeResetForNewRep = function(currentState) { /* streaming 模式下不重置 */ };
 
 // Build legend once
 (function() {
@@ -2699,6 +3620,25 @@ function drawEmgWaveform() {
     ctx.lineWidth = 0.5;
     for (var y = 0; y <= H; y += 30) {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+    // Pure-vision mode: show placeholder, no signals
+    if (emgHasRealSensor === false) {
+        var keys0 = ['quadriceps', 'glutes', 'calves', 'biceps'];
+        ctx.strokeStyle = 'rgba(120,130,150,0.35)';
+        ctx.lineWidth = 1.2;
+        for (var j = 0; j < keys0.length; j++) {
+            var yLine = ((j + 1) / (keys0.length + 1)) * H;
+            ctx.beginPath();
+            ctx.moveTo(20, yLine);
+            ctx.lineTo(W - 10, yLine);
+            ctx.stroke();
+        }
+        ctx.fillStyle = 'rgba(255,255,255,0.55)';
+        ctx.font = '600 14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('\u65e0\u4f20\u611f\u5668\u4fe1\u53f7 (\u7eaf\u89c6\u89c9\u6a21\u5f0f)', W / 2, H / 2);
+        ctx.textAlign = 'start';
+        return;
     }
     // Y-axis labels
     ctx.fillStyle = 'rgba(255,255,255,0.15)';
@@ -2727,6 +3667,8 @@ function drawEmgWaveform() {
 }
 
 // Polling: fetch EMG data and update waveform
+// V7.15: 3000ms → 100ms (10Hz), 肌电曲线即时刷新
+var _latestActs = {quadriceps: 0, glutes: 0, calves: 0, biceps: 0};
 setInterval(function() {
     fetch('/api/muscle_activation', { cache: 'no-store' })
     .then(function(res) { return res.ok ? res.json() : null; })
@@ -2734,12 +3676,15 @@ setInterval(function() {
         if (!d || !d.activations) return;
         var acts = d.activations;
         var keys = ['quadriceps', 'glutes', 'calves', 'biceps'];
+        // V7.16 streaming: 始终保持 MAX_POINTS 个点 (左老右新), 曲线永远铺满宽度
         for (var i = 0; i < keys.length; i++) {
             var k = keys[i];
             var val = acts[k] || 0;
             emgHistory[k].push(val);
-            if (emgHistory[k].length > EMG_MAX_POINTS) emgHistory[k].shift();
+            // 保证长度恒 = MAX_POINTS (shift 掉多余的最老点)
+            while (emgHistory[k].length > EMG_MAX_POINTS) emgHistory[k].shift();
         }
+        _latestActs = acts;
         // Detect real vs simulated sensor
         var noSensorLabel = document.getElementById('emgNoSensor');
         if (noSensorLabel) {
@@ -2748,7 +3693,7 @@ setInterval(function() {
         }
         drawEmgWaveform();
     }).catch(function() {});
-}, 3000);
+}, 100);
 
 
 // ===== Log Polling =====
@@ -2772,18 +3717,18 @@ document.addEventListener('touchmove', function(e) {
 // ===== Feishu Plan Push =====
 async function sendFeishuPlan() {
     var status = document.getElementById('feishuStatus');
-    if (status) status.textContent = '正在生成健身规划...';
+    if (status) status.textContent = '正在发起最新认知引擎推送...';
     try {
-        var res = await fetch('/api/feishu/send_plan', {
+        var res = await fetch('/api/feishu/push', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({})
+            body: JSON.stringify({'type': 'plan'})
         });
         var d = await res.json();
         if (d.ok) {
             if (status) status.textContent = '已推送到飞书!';
             if (status) status.style.color = 'var(--accent-green)';
-            showToast('飞书推送成功', '', false);
+            showToast('飞书计划推送成功', '', false);
         } else {
             if (status) status.textContent = '失败: ' + (d.error || '');
             if (status) status.style.color = 'var(--accent-red)';
@@ -2792,6 +3737,167 @@ async function sendFeishuPlan() {
         if (status) status.textContent = '请求失败';
     }
 }
+
+// ===== MVC 校准（V4.7 新增，约定后端 /api/mvc_calibrate 由 Agent-B 提供）=====
+async function triggerMvcCalibrate(){
+  const btn = document.getElementById('btnMvcCalibrate');
+  const status = document.getElementById('mvcStatus');
+  if (!btn || !status) return;
+  btn.disabled = true; btn.style.opacity = '0.5';
+  status.textContent = '采集中（用最大力做 3 秒）...';
+  status.style.color = 'var(--accent-amber)';
+  try{
+    const resp = await fetch('/api/mvc_calibrate', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
+    const j = await resp.json();
+    if (j.ok){
+      status.textContent = `完成 target=${(j.target||0).toFixed(1)} comp=${(j.comp||0).toFixed(1)}`;
+      status.style.color = 'var(--accent-green)';
+    } else {
+      status.textContent = '失败：' + (j.error || 'unknown');
+      status.style.color = 'var(--accent-red)';
+    }
+  } catch(e){
+    status.textContent = '网络错误';
+    status.style.color = 'var(--accent-red)';
+  } finally {
+    btn.disabled = false; btn.style.opacity = '1';
+  }
+}
+
+// ===== V7.16 测试采集 (FSM-对齐 rep) =====
+var _capPollTimer = null;
+var _capActive = false;
+
+function _capSetButtons(running) {
+  var s = document.getElementById('capStartBtn');
+  var p = document.getElementById('capStopBtn');
+  var c = document.getElementById('capClearBtn');
+  if (s) s.disabled = running;
+  if (p) p.disabled = !running;
+  if (c) c.disabled = !running;
+  _capActive = running;
+}
+
+function _capSetStatus(text, color) {
+  var el = document.getElementById('capStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = color || 'var(--text-muted)';
+}
+
+function _capSetMeta(html) {
+  var el = document.getElementById('capMeta');
+  if (el) el.innerHTML = html || '';
+}
+
+async function testCaptureStart() {
+  var ex = document.getElementById('capExercise').value;
+  var lb = document.getElementById('capLabel').value;
+  _capSetStatus('启动中 ...', 'var(--accent-amber)');
+  _capSetMeta('');
+  try {
+    var resp = await fetch('/api/test_capture/start', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({exercise: ex, label: lb})
+    });
+    var j = await resp.json();
+    if (!j.ok) {
+      _capSetStatus('启动失败: ' + (j.error || '未知'), 'var(--accent-red)');
+      return;
+    }
+    _capSetButtons(true);
+    var tag = j.ack ? '✓ 模拟器已响应' : '⚠ 模拟器未 ack (检查脚本是否运行)';
+    _capSetStatus('采集中 · session=' + j.session_id + ' · ' + tag,
+                  j.ack ? 'var(--accent-green)' : 'var(--accent-amber)');
+    _capSetMeta('输出: <code style="font-size:10px;">' + (j.out_dir || '') + '</code>');
+    _startCapPoll();
+  } catch (e) {
+    _capSetStatus('网络错误: ' + e, 'var(--accent-red)');
+  }
+}
+
+async function testCaptureStop() {
+  _capSetStatus('落盘中 (最多 5s) ...', 'var(--accent-amber)');
+  _stopCapPoll();
+  try {
+    var resp = await fetch('/api/test_capture/stop', {method: 'POST'});
+    var j = await resp.json();
+    if (j.ok) {
+      _capSetStatus('✅ 完成 · ' + (j.rep_count || 0) + ' reps · ' +
+                    (j.raw_rows || 0) + ' rows · ' + (j.duration_s || 0) + 's',
+                    'var(--accent-green)');
+      _capSetMeta('保存到: <code style="font-size:10px;">' + (j.out_dir || '') + '</code>');
+    } else {
+      _capSetStatus('失败: ' + (j.error || '未知'), 'var(--accent-red)');
+    }
+  } catch (e) {
+    _capSetStatus('网络错误: ' + e, 'var(--accent-red)');
+  } finally {
+    _capSetButtons(false);
+  }
+}
+
+async function testCaptureClear() {
+  if (!confirm('确定丢弃当前缓冲数据，不落盘？')) return;
+  _capSetStatus('清空中 ...', 'var(--accent-amber)');
+  _stopCapPoll();
+  try {
+    var resp = await fetch('/api/test_capture/clear', {method: 'POST'});
+    var j = await resp.json();
+    _capSetStatus(j.ok ? '🗑️ 已丢弃' : ('失败: ' + (j.error || '')),
+                  j.ok ? 'var(--text-muted)' : 'var(--accent-red)');
+    _capSetMeta('');
+  } catch (e) {
+    _capSetStatus('网络错误: ' + e, 'var(--accent-red)');
+  } finally {
+    _capSetButtons(false);
+  }
+}
+
+function _startCapPoll() {
+  _stopCapPoll();
+  _capPollTimer = setInterval(async function() {
+    try {
+      var r = await fetch('/api/test_capture/status', {cache: 'no-store'});
+      var s = await r.json();
+      if (s.active) {
+        var reps = s.fsm_reps !== undefined ? s.fsm_reps : '?';
+        var dur = s.started_ts ? Math.floor(Date.now() / 1000 - s.started_ts) : 0;
+        _capSetStatus('采集中 · FSM reps=' + reps + ' · ' + dur + 's',
+                      'var(--accent-green)');
+      } else {
+        // 模拟器可能自己结束了
+        _stopCapPoll();
+        _capSetButtons(false);
+      }
+    } catch (e) {
+      // ignore transient errors
+    }
+  }, 1000);
+}
+
+function _stopCapPoll() {
+  if (_capPollTimer) {
+    clearInterval(_capPollTimer);
+    _capPollTimer = null;
+  }
+}
+
+// 页面加载时查一次状态 (防刷新后按钮状态错乱)
+document.addEventListener('DOMContentLoaded', function() {
+  fetch('/api/test_capture/status', {cache: 'no-store'})
+    .then(function(r) { return r.json(); })
+    .then(function(s) {
+      if (s && s.active) {
+        _capSetButtons(true);
+        _capSetStatus('已有进行中的采集 · session=' + s.session_id + ' (' + (s.exercise || '') + '/' + (s.label || '') + ')',
+                      'var(--accent-amber)');
+        _startCapPoll();
+      }
+    })
+    .catch(function() {});
+});
 
 // ===== HDMI Status Polling =====
 var hdmiActive = false;
@@ -2814,7 +3920,7 @@ setInterval(function() {
                 if (feed) { feed.style.display = ''; }
                 if (tag) tag.style.display = 'none';
                 // Reconnect video stream (force reconnect after HDMI unplug)
-                var host = window.location.hostname || '10.105.245.224';
+                var host = window.location.hostname || '10.18.76.224';
                 if (feed) {
                     feed.src = '';
                     setTimeout(function() {
@@ -2826,15 +3932,39 @@ setInterval(function() {
     }).catch(function() {});
 }, 5000);
 
-// ===== Update header status tags =====
+// ===== V6.1: Update header status tags from fsm_state (\u771f\u5b9e\u6001 \u2014 \u4e0d\u9760 UI \u63a7\u4ef6) =====
 function updateHeaderTags() {
     var tagEx = document.getElementById('tagExercise');
     var tagVis = document.getElementById('tagVision');
-    var exSel = document.getElementById('cfgExercise');
-    var visSel = document.getElementById('cfgVisionMode');
-    if (tagEx && exSel) tagEx.textContent = exSel.options[exSel.selectedIndex].text;
-    if (tagVis && visSel) tagVis.textContent = visSel.options[visSel.selectedIndex].text;
+    var tagInf = document.getElementById('tagInferenceMode');
+    fetch('/api/fsm_state', { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(d) {
+        if (!d) return;
+        if (tagEx) {
+            var ex = d.exercise || 'squat';
+            tagEx.textContent = (ex === 'bicep_curl' || ex === 'curl') ? '\u5f2f\u4e3e' : '\u6df1\u8e72';
+        }
+        // V7.7: \u79fb\u9664 tagInferenceMode \u5199\u5165 —— \u4e0e /api/inference_mode poll \u7ade\u4e89\u5bfc\u81f4\u6a2a\u8df3
+        // \u7eaf\u89c6\u89c9/\u89c6\u89c9+\u4f20\u611f \u5355\u4e00\u6743\u5a01\u6e90 = /dev/shm/inference_mode.json\uff0c\u7531 L2046 \u7684 3s \u8f6e\u8be2\u8d1f\u8d23\u5199 chip
+    }).catch(function() {});
+    // \u89c6\u89c9\u540e\u7aef \u4ece /api/vision_mode \u8bfb
+    fetch('/api/vision_mode', { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(d) {
+        if (tagVis && d && d.mode) {
+            tagVis.textContent = (d.mode === 'cloud') ? '\u4e91\u7aef' : '\u672c\u5730';
+        }
+    }).catch(function() {});
 }
+// V6.1: \u4e00\u76f4\u8f6e\u8be2\u9876\u90e8\u72b6\u6001, \u8bed\u97f3\u5207\u6362\u540e 1s \u5185\u66f4\u65b0
+setInterval(updateHeaderTags, 1000);
+
+// V7.3: \u4e2d\u67f1 HUD \u955c\u50cf\u73b0\u6709\u9876\u90e8\u6807\u7b7e\u4e0e\u89c6\u9891 HUD\uff0c\u4e0d\u65b0\u589e\u903b\u8f91
+setInterval(function(){
+    var a = document.getElementById('kinHudAction');
+    var g = document.getElementById('kinHudAngle');
+    var srcA = document.getElementById('tagExercise');
+    var srcG = document.getElementById('hudAngle');
+    if (a && srcA) a.textContent = srcA.textContent || '--';
+    if (g && srcG) g.textContent = srcG.textContent || '--';
+}, 250);
 
 // ===== Init =====
 (function init() {
@@ -2850,9 +3980,9 @@ function updateHeaderTags() {
     }).catch(function() {});
     fetch('/api/inference_mode', { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(d) {
         if (d.mode) {
-            switchInferenceMode(d.mode);
-            var sel = document.getElementById('cfgInferenceMode');
-            if (sel) sel.value = d.mode;
+            // V6.1: \u4ec5\u663e\u793a\u5230\u9876\u90e8 tag, \u4e0d\u518d\u5199\u56de select (\u5df2\u5220\u9664)
+            var chip = document.getElementById('tagInferenceMode');
+            if (chip) chip.textContent = (d.mode === 'vision_sensor') ? '\u89c6\u89c9+\u4f20\u611f' : '\u7eaf\u89c6\u89c9';
         }
     }).catch(function() {});
     updateHeaderTags();

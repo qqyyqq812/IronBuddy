@@ -126,6 +126,10 @@ class SquatStateMachine:
         self._descending_start_ts = 0.0   # 进入 DESCENDING 的时戳
         self._falling_frames = 0          # 连续 falling 趋势计数 (入场门控)
         self._rising_frames = 0           # 连续 rising 趋势计数 (离场门控)
+        # V7.17 (2026-04-20): BOTTOM/ASCENDING 可见化 —— 用户验收拍片需要完整"蹲到底→上升"动作反馈
+        self._bottom_frames = 0           # 连续处于底部稳定带的帧数
+        self._BOTTOM_WINDOW = 4           # 连续 4 帧稳定 = 蹲到底 (~0.3s @ 13fps)
+        self._BOTTOM_EPS = 5.0            # 度 — 底部稳定带宽度
 
     def calculate_angle(self, a, b, c):
         try:
@@ -272,8 +276,8 @@ class SquatStateMachine:
 
             trend = self._get_trend()
 
-            # ===== 状态流转 (V7.16: 四级防抖) =====
-            if self.state in ["NO_PERSON", "IDLE", "ASCENDING", "STAND"]:
+            # ===== 状态流转 (V7.17: 五级可见 —— NO_PERSON/STAND/DESCENDING/BOTTOM/ASCENDING) =====
+            if self.state in ["NO_PERSON", "IDLE", "STAND"]:
                 # V7.16: 维护连续 falling 帧计数 (其他趋势重置)
                 if trend == "falling":
                     self._falling_frames += 1
@@ -287,6 +291,7 @@ class SquatStateMachine:
                     self._min_angle_in_rep = angle
                     self._descending_start_ts = time.time()
                     self._rising_frames = 0
+                    self._bottom_frames = 0
                     self.last_active_time = time.time()
                 else:
                     self.state = "STAND"
@@ -312,6 +317,43 @@ class SquatStateMachine:
                     self._min_angle_in_rep = min(self._min_angle_in_rep, virtual_bottom, angle)
                 else:
                     self._min_angle_in_rep = min(self._min_angle_in_rep, angle)
+
+                # V7.17: 底部稳定带 —— 角度在 min + 5° 内连续 N 帧 ⇒ BOTTOM（蹲到底）
+                if angle <= self._min_angle_in_rep + self._BOTTOM_EPS:
+                    self._bottom_frames += 1
+                else:
+                    self._bottom_frames = 0
+
+                # V7.17: 快速 rep（无明显 hold）—— 已离底 > 10° 且连续 rising ⇒ 直入 ASCENDING
+                if angle > self._min_angle_in_rep + 10.0 and self._rising_frames >= 2:
+                    self.state = "ASCENDING"
+                # V7.17: 标准 rep —— 底部稳定带达标 ⇒ BOTTOM
+                elif self._bottom_frames >= self._BOTTOM_WINDOW:
+                    self.state = "BOTTOM"
+                    self._rising_frames = 0
+
+            elif self.state == "BOTTOM":
+                # V7.17: 蹲到底稳定态 —— 继续下落则回 DESCENDING 更新 min；连续 rising ⇒ ASCENDING
+                self.last_active_time = time.time()
+                self._min_angle_in_rep = min(self._min_angle_in_rep, angle)
+                if trend == "rising":
+                    self._rising_frames += 1
+                elif trend == "falling":
+                    self._rising_frames = 0
+                    # 还在继续探底 — 回 DESCENDING 刷 min
+                    if angle < self._min_angle_in_rep - 1.5:
+                        self.state = "DESCENDING"
+                        self._bottom_frames = 0
+                if self._rising_frames >= 2 and angle > self._min_angle_in_rep + 5.0:
+                    self.state = "ASCENDING"
+
+            elif self.state == "ASCENDING":
+                # V7.17: 上升段 —— 原 DESCENDING 内的结账逻辑搬到此处
+                self.last_active_time = time.time()
+                if trend == "rising":
+                    self._rising_frames += 1
+                elif trend == "falling":
+                    self._rising_frames = 0
 
                 # V7.16: 结账必须满足 ALL 三项 —— angle>150 (安全边距) + 2 连续 rising + 最小 rep 时长 0.5s
                 _dur_ok = (time.time() - self._descending_start_ts) >= 0.5
@@ -357,6 +399,7 @@ class SquatStateMachine:
                     self._falling_frames = 0
                     self._rising_frames = 0
                     self._descending_start_ts = 0.0
+                    self._bottom_frames = 0               # V7.17: 底部帧计数复位
                     # V7.13: rep 结算后清空外插追踪, 避免串到下一 rep
                     self._last_valid_angle_sq = None
                     self._last_ang_vel_sq = 0.0
