@@ -93,7 +93,7 @@ except Exception as e:
 
 
 class SquatStateMachine:
-    ANGLE_STANDARD = 100    # 必须下蹲到 100° 以内才算标准（用户要求 v5.3）
+    ANGLE_STANDARD = 90     # V7.18 (2026-04-20): rep 最低点 < 90° → 标准；否则 → 不标准（二元归类，不留悬空）
     TREND_WINDOW = 8       # 趋势检测滑窗大小
     IDLE_RANGE = 20        # 角度波动小于此值 = 静止
     IDLE_FRAMES = 25       # 连续多少帧稳定才切入 IDLE（~3s）
@@ -350,14 +350,18 @@ class SquatStateMachine:
             elif self.state == "ASCENDING":
                 # V7.17: 上升段 —— 原 DESCENDING 内的结账逻辑搬到此处
                 self.last_active_time = time.time()
+                # V7.18: ASCENDING 也追踪最低点 (防抖 2 帧 rising 判定可能错过一次反弹)
+                self._min_angle_in_rep = min(self._min_angle_in_rep, angle)
                 if trend == "rising":
                     self._rising_frames += 1
                 elif trend == "falling":
                     self._rising_frames = 0
 
-                # V7.16: 结账必须满足 ALL 三项 —— angle>150 (安全边距) + 2 连续 rising + 最小 rep 时长 0.5s
-                _dur_ok = (time.time() - self._descending_start_ts) >= 0.5
-                if angle > 150 and self._rising_frames >= 2 and _dur_ok:
+                # V7.19 (2026-04-20): 结账门槛放宽 —— 用户姿态偏低起身不到 150° 时 rep 永远不结账
+                # 新门槛：离底 ≥ 25° + 连续 rising ≥ 2 帧 + dur ≥ 0.4s
+                _dur_ok = (time.time() - self._descending_start_ts) >= 0.4
+                _rose_enough = angle > (self._min_angle_in_rep + 25.0)
+                if _rose_enough and self._rising_frames >= 2 and _dur_ok:
                     bottom = self._min_angle_in_rep
                     # V7.15: 无论模式都推进 rep 边界计数 + 疲劳 (外层 GRU 推理靠此触发)
                     self._total_reps_count += 1
@@ -377,19 +381,15 @@ class SquatStateMachine:
                             pass
                         self._mode_last_ts = now_for_mode
 
-                    if self._mode_cache == "vision_sensor":
-                        # V7.15: vision_sensor 模式 — good/failed/comp 由外层 GRU 分类决定
-                        # 不在此处累加, 不触发"不标准"警报
-                        logging.info(f"⏳ [vision_sensor] rep #{self._total_reps_count} 角度{bottom:.0f}° 等待 GRU 分类")
+                    # V7.18 (2026-04-20): 无论模式, 每个 rep 必然归类 good/failed —— 取消"等待 GRU"悬空
+                    # 代偿 (comp) 仍由 GRU 分类独立累加, 与 good/failed 正交
+                    if bottom < self.ANGLE_STANDARD:
+                        self.good_squats += 1
+                        logging.info(f"🟢 标准（{self._mode_cache}）rep#{self._total_reps_count} 最低{bottom:.0f}° < {self.ANGLE_STANDARD}°  疲劳{self.total_fatigue_volume:.1f}")
                     else:
-                        # pure_vision 模式 — 保留角度硬判定
-                        if bottom < self.ANGLE_STANDARD:
-                            self.good_squats += 1
-                            logging.info(f"🟢 好球！（角度{bottom:.0f}°）当前总疲劳值: {self.total_fatigue_volume:.1f}")
-                        else:
-                            self.failed_squats += 1
-                            self.trigger_buzzer_alert()
-                            logging.warning(f"🟡 违规：下蹲幅度不足！（当前最低{bottom:.0f}°）累计违规：{self.failed_squats}")
+                        self.failed_squats += 1
+                        self.trigger_buzzer_alert()
+                        logging.warning(f"🟡 不标准（{self._mode_cache}）rep#{self._total_reps_count} 最低{bottom:.0f}° >= {self.ANGLE_STANDARD}°  累计违规{self.failed_squats}")
 
                     # 结算完毕，复位回归直立监控区
                     self.state = "STAND"
@@ -636,9 +636,10 @@ class DumbbellCurlFSM:
                 else:
                     self._min_angle_in_rep = min(self._min_angle_in_rep, angle)
 
-                # V7.16: 结账门 —— angle>150 + 2 连续 rising + 最小 rep 时长 0.5s
-                _dur_ok = (time.time() - self._curling_start_ts) >= 0.5
-                if angle > 150 and self._opening_frames >= 2 and _dur_ok:
+                # V7.19 (2026-04-20): 结账放宽 —— 离顶 ≥ 25° + 2 连续 opening + dur ≥ 0.4s
+                _dur_ok = (time.time() - self._curling_start_ts) >= 0.4
+                _rose_enough = angle > (self._min_angle_in_rep + 25.0)
+                if _rose_enough and self._opening_frames >= 2 and _dur_ok:
                     bottom = self._min_angle_in_rep
                     # V7.15: 无论模式都推进 rep 边界计数 + 疲劳
                     self._total_reps_count += 1
@@ -658,16 +659,14 @@ class DumbbellCurlFSM:
                             pass
                         self._mode_last_ts = now_for_mode
 
-                    if self._mode_cache == "vision_sensor":
-                        logging.info(f"⏳ [vision_sensor] 弯举 rep #{self._total_reps_count} 顶峰{bottom:.0f}° 等待 GRU 分类")
+                    # V7.18 (2026-04-20): 弯举也取消 vision_sensor 悬空 —— 每 rep 必归类
+                    if bottom < self.ANGLE_STANDARD:
+                        self._good_reps += 1
+                        logging.info(f"🟢 弯举标准（{self._mode_cache}）rep#{self._total_reps_count} 顶峰{bottom:.0f}° < {self.ANGLE_STANDARD}°  疲劳{self.total_fatigue_volume:.1f}")
                     else:
-                        if bottom < self.ANGLE_STANDARD:
-                            self._good_reps += 1
-                            logging.info(f"🟢 弯举达标！（顶峰角度{bottom:.0f}°）总疲劳值: {self.total_fatigue_volume:.1f}")
-                        else:
-                            self._failed_reps += 1
-                            self.trigger_buzzer_alert()
-                            logging.warning(f"🟡 弯举违规：收缩幅度不足！（收缩极限仅有{bottom:.0f}°）累计违规：{self._failed_reps}")
+                        self._failed_reps += 1
+                        self.trigger_buzzer_alert()
+                        logging.warning(f"🟡 弯举不标准（{self._mode_cache}）rep#{self._total_reps_count} 顶峰{bottom:.0f}° >= {self.ANGLE_STANDARD}°  违规{self._failed_reps}")
 
                     self.state = "STAND"
                     self._min_angle_in_rep = 999
@@ -746,11 +745,17 @@ async def _deepseek_fire_and_forget(bridge, prompt, good_count, failed_count):
     return ""
 
 
+_V_BANNER = "V7.18.2 (2026-04-20)"  # 版本标识 — 启动 banner 用
+
 async def main():
     # 必须在函数顶部声明 global, 因为下方 909/920 行会读 _GRU_MODEL,
     # 982 行才赋值; Python 3 要求 global 声明先于任何读写
     global _GRU_MODEL
     logging.info("🚀 启动 IronBuddy V3 双轨融合状态机中枢...")
+    logging.info("═════════════════════════════════════════════════════════")
+    logging.info(f"🎯 FSM {_V_BANNER}  深蹲阈值={SquatStateMachine.ANGLE_STANDARD}°  弯举阈值={DumbbellCurlFSM.ANGLE_STANDARD}°")
+    logging.info(f"   rep 结账门槛: 离底≥25° + 连续 rising≥2 帧 + dur≥0.4s (V7.19 放宽)")
+    logging.info("═════════════════════════════════════════════════════════")
 
     for f in ["/dev/shm/llm_reply.txt", "/dev/shm/chat_input.txt", "/dev/shm/chat_reply.txt"]:
         try:
@@ -1242,27 +1247,26 @@ async def main():
             should_trigger = (manual_trigger or fatigue_trigger) and has_data and not _ds_lock[0] and not is_chatting and not is_muted
 
             if should_trigger:
-                # V7.11: \u4e0d\u518d\u6e05\u96f6, \u8ba9\u75b2\u52b3\u503c\u6ea2\u51fa\u7ee7\u7eed\u7d2f\u52a0 (\u7528\u6237\u53ef\u89c1 UI \u4e00\u76f4\u589e)
-                # _this_set_triggered \u91cd\u590d\u89e6\u53d1\u9632\u62a4, "\u4e0b\u4e00\u7ec4" \u624d\u91cd\u7f6e
-                _ds_lock[0] = True
-                if fatigue_trigger:
-                    _this_set_triggered[0] = True  # V7.11: \u6bcf\u7ec4\u89e6\u53d1\u4e00\u6b21\u540e\u952e\u4e0a\u9501, "\u4e0b\u4e00\u7ec4"\u89e3\u9501
-                _last_deepseek_time = time.time()
+                # M12 (V7.20, 2026-04-20): 防止 LLM 不通时 _ds_lock 永久死锁
+                # 上一个 bug: connected=False 时仍设 _ds_lock=True + _this_set_triggered=True,
+                # 但 _ds_wrapper (唯一解锁者) 不被调用, 整个 session 再也无法触发任何总结.
+                # 修复: 前置判定 LLM 可用性, 不可用走本地兜底文案直写 llm_reply.txt, 不上锁.
                 good_count = fsm.good_squats
                 failed_count = fsm.failed_squats
                 reason = "疲劳满值自动" if fatigue_trigger else "手动按键"
-                logging.info(f"⏳ 触发大模型结组 ({reason}) - (标准:{good_count} 违规:{failed_count})")
+                comp_count = getattr(fsm, '_compensation_count', 0)
+                data_line = f"标准{good_count}次，不标准{failed_count}次，代偿{comp_count}次"
+                is_perfect = failed_count == 0 and comp_count == 0
 
-                if connected:
-                    # V7.10 + M8 (V7.14): prompt 必含代偿维度, 并区分三类反馈
-                    #  (a) 全标准 -> 鼓励
-                    #  (b) 有违规半蹲 -> 指出幅度问题
-                    #  (c) 有代偿 -> 指出代偿问题 (腰背/膝内扣等)
-                    # 三类同时出现: 综合点评
-                    comp_count = getattr(fsm, '_compensation_count', 0)
-                    is_perfect = failed_count == 0 and comp_count == 0
-                    # 统一 data_line 格式, 代偿始终写入 (即使为 0, 也让教练能表扬"无代偿")
-                    data_line = f"标准{good_count}次，不标准{failed_count}次，代偿{comp_count}次"
+                _llm_ok = connected and (bridge is not None)
+
+                if _llm_ok:
+                    # V7.11 正常路径: 上锁 + 异步 DeepSeek
+                    _ds_lock[0] = True
+                    if fatigue_trigger:
+                        _this_set_triggered[0] = True
+                    _last_deepseek_time = time.time()
+                    logging.info(f"⏳ 触发大模型结组 ({reason}) - (标准:{good_count} 违规:{failed_count} 代偿:{comp_count})")
                     if is_perfect:
                         feedback_line = "给出正向鼓励继续保持"
                     elif comp_count > 0 and failed_count == 0:
@@ -1276,10 +1280,43 @@ async def main():
                         f"{feedback_line}。"
                         f"要求: 25字内, 一段话, 无标点花哨, 不提疲劳分数。"
                     )
-                    if bridge is not None:
-                        asyncio.create_task(_ds_wrapper(bridge, short_prompt, good_count, failed_count, reason))
-                    # V7.10: 组间休息机制 — 总结后保留数据, 等用户说"下一组"才重置
-                    # 通过 /dev/shm/next_set.request 信号触发 (语音"下一组"硬编码写入)
+                    asyncio.create_task(_ds_wrapper(bridge, short_prompt, good_count, failed_count, reason))
+                else:
+                    # M12 兜底: LLM 不通时仍要给用户反馈, 写本地预置文案到 llm_reply.txt
+                    # voice_daemon 的 _llm_reply_watcher 会正常捕获并 TTS 播报
+                    # 并且: 仍然按 V7.11 上锁防止每帧重触, "下一组" 才解锁
+                    _ds_lock[0] = True
+                    if fatigue_trigger:
+                        _this_set_triggered[0] = True
+                    _last_deepseek_time = time.time()
+                    if is_perfect:
+                        fallback = f"本组{data_line}全部达标，继续保持！"
+                    elif comp_count > 0 and failed_count == 0:
+                        fallback = f"本组{data_line}，注意腰背和膝盖姿态"
+                    elif comp_count == 0 and failed_count > 0:
+                        fallback = f"本组{data_line}，下次蹲到位"
+                    else:
+                        fallback = f"本组{data_line}，下次更认真"
+                    logging.warning(f"⚠️ [M12] LLM 未连接, 走本地兜底文案: {fallback}")
+                    try:
+                        with open("/dev/shm/llm_reply.txt.tmp", "w", encoding="utf-8") as rf:
+                            rf.write(fallback)
+                        os.rename("/dev/shm/llm_reply.txt.tmp", "/dev/shm/llm_reply.txt")
+                        # 写 seq 让 voice_daemon 的 watcher 命中
+                        _seq_path = "/dev/shm/llm_reply.txt.seq"
+                        _prev = 0
+                        try:
+                            if os.path.exists(_seq_path):
+                                with open(_seq_path, "r") as _sf:
+                                    _prev = int((_sf.read() or "0").strip() or "0")
+                        except Exception:
+                            _prev = 0
+                        with open(_seq_path + ".tmp", "w") as _sf:
+                            _sf.write(str(_prev + 1))
+                        os.rename(_seq_path + ".tmp", _seq_path)
+                    except Exception as _fbe:
+                        logging.error(f"[M12] 兜底 llm_reply 写入失败: {_fbe}")
+                    # 兜底路径: 不走 _ds_wrapper, 但锁会在 "下一组" 请求时被重置 (L1193)
 
             # ===== 语音对话轮询 =====
             if connected and bridge is not None and not _chat_lock[0] and os.path.exists("/dev/shm/chat_input.txt"):
