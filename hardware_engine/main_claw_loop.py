@@ -122,6 +122,10 @@ class SquatStateMachine:
         # V7.15: inference_mode 缓存 (避免每帧读盘)
         self._mode_cache = "pure_vision"
         self._mode_last_ts = 0.0
+        # V7.16: rep-level debounce 三件套 (复用 self._last_count_time 作为冷却闸门)
+        self._descending_start_ts = 0.0   # 进入 DESCENDING 的时戳
+        self._falling_frames = 0          # 连续 falling 趋势计数 (入场门控)
+        self._rising_frames = 0           # 连续 rising 趋势计数 (离场门控)
 
     def calculate_angle(self, a, b, c):
         try:
@@ -268,18 +272,32 @@ class SquatStateMachine:
 
             trend = self._get_trend()
 
-            # ===== 状态流转 (绝对阈值迟滞法) =====
+            # ===== 状态流转 (V7.16: 四级防抖) =====
             if self.state in ["NO_PERSON", "IDLE", "ASCENDING", "STAND"]:
-                # 只有大角度稳定跌破 140°，才被认为是真正地开始了下蹲流程
-                if angle < 140:
+                # V7.16: 维护连续 falling 帧计数 (其他趋势重置)
+                if trend == "falling":
+                    self._falling_frames += 1
+                elif trend == "rising":
+                    self._falling_frames = 0
+
+                # V7.16: 入场必须满足 ALL 三项 —— 角度阈值 + 2 连续 falling + 0.8s 冷却
+                _cooldown_ok = (time.time() - self._last_count_time) >= 0.8
+                if angle < 140 and self._falling_frames >= 2 and _cooldown_ok:
                     self.state = "DESCENDING"
                     self._min_angle_in_rep = angle
+                    self._descending_start_ts = time.time()
+                    self._rising_frames = 0
                     self.last_active_time = time.time()
                 else:
                     self.state = "STAND"
-                    
+
             elif self.state == "DESCENDING":
                 self.last_active_time = time.time()
+                # V7.16: 维护连续 rising 帧计数 (在 DESCENDING 中统计起身信号)
+                if trend == "rising":
+                    self._rising_frames += 1
+                elif trend == "falling":
+                    self._rising_frames = 0
                 # V7.13 底部外插: 若两帧间隙 > 80ms 且之前在下落, 认为错过了真实底部
                 # 用 angle_prev + ang_vel_prev * dt/2 估算中间点的最深角度
                 now_ts = time.time()
@@ -295,8 +313,9 @@ class SquatStateMachine:
                 else:
                     self._min_angle_in_rep = min(self._min_angle_in_rep, angle)
 
-                # 只要起身到 145，就立刻结账，不必等完全 150，这极大防止了计数丢失
-                if angle > 145:
+                # V7.16: 结账必须满足 ALL 三项 —— angle>150 (安全边距) + 2 连续 rising + 最小 rep 时长 0.5s
+                _dur_ok = (time.time() - self._descending_start_ts) >= 0.5
+                if angle > 150 and self._rising_frames >= 2 and _dur_ok:
                     bottom = self._min_angle_in_rep
                     # V7.15: 无论模式都推进 rep 边界计数 + 疲劳 (外层 GRU 推理靠此触发)
                     self._total_reps_count += 1
@@ -333,7 +352,11 @@ class SquatStateMachine:
                     # 结算完毕，复位回归直立监控区
                     self.state = "STAND"
                     self._min_angle_in_rep = 999
-                    self._last_count_time = time.time()
+                    self._last_count_time = time.time()   # V7.16: 激活 rep 冷却锁
+                    # V7.16: 清零 debounce 计数，避免串到下一 rep
+                    self._falling_frames = 0
+                    self._rising_frames = 0
+                    self._descending_start_ts = 0.0
                     # V7.13: rep 结算后清空外插追踪, 避免串到下一 rep
                     self._last_valid_angle_sq = None
                     self._last_ang_vel_sq = 0.0
@@ -380,6 +403,23 @@ class DumbbellCurlFSM:
         self._total_reps_count = 0
         self._mode_cache = "pure_vision"
         self._mode_last_ts = 0.0
+        # V7.16: rep-level debounce 三件套 (与 SquatStateMachine 对称)
+        self._curling_start_ts = 0.0      # 进入 CURLING 的时戳
+        self._closing_frames = 0          # 连续肘关节闭合 (falling) 帧 — 入场门控
+        self._opening_frames = 0          # 连续肘关节张开 (rising) 帧 — 离场门控
+
+    # V7.16: 与 SquatStateMachine._get_trend 同逻辑，curl 的 falling=收紧、rising=伸展
+    def _get_trend(self):
+        if len(self._angle_history) < 6:
+            return "stable"
+        recent = self._angle_history[-6:]
+        deltas = [recent[i+1] - recent[i] for i in range(len(recent)-1)]
+        avg_delta = sum(deltas) / len(deltas)
+        if avg_delta < -2.5:
+            return "falling"
+        elif avg_delta > 2.5:
+            return "rising"
+        return "stable"
 
     @property
     def good_squats(self): return self._good_reps
@@ -516,16 +556,29 @@ class DumbbellCurlFSM:
             smooth_n = min(5, len(self._angle_history))
             angle = sum(self._angle_history[-smooth_n:]) / smooth_n
 
+            # V7.16: 四级防抖状态流转（与 squat 对称）
+            trend = self._get_trend()
             if self.state in ["NO_PERSON", "IDLE", "STAND", "EXTENDING"]:
-                if angle < 140:
+                if trend == "falling":
+                    self._closing_frames += 1
+                elif trend == "rising":
+                    self._closing_frames = 0
+                _cooldown_ok = (time.time() - self._last_count_time) >= 0.8
+                if angle < 140 and self._closing_frames >= 2 and _cooldown_ok:
                     self.state = "CURLING"
                     self._min_angle_in_rep = angle
+                    self._curling_start_ts = time.time()
+                    self._opening_frames = 0
                     self.last_active_time = time.time()
                 else:
                     self.state = "STAND"
-                    
+
             elif self.state == "CURLING":
                 self.last_active_time = time.time()
+                if trend == "rising":
+                    self._opening_frames += 1
+                elif trend == "falling":
+                    self._opening_frames = 0
                 # V7.13 顶峰外插: 若两帧间隙 > 80ms 且之前在收紧, 认为错过了真实顶峰
                 now_ts = time.time()
                 virtual_peak = None
@@ -540,7 +593,9 @@ class DumbbellCurlFSM:
                 else:
                     self._min_angle_in_rep = min(self._min_angle_in_rep, angle)
 
-                if angle > 145:
+                # V7.16: 结账门 —— angle>150 + 2 连续 rising + 最小 rep 时长 0.5s
+                _dur_ok = (time.time() - self._curling_start_ts) >= 0.5
+                if angle > 150 and self._opening_frames >= 2 and _dur_ok:
                     bottom = self._min_angle_in_rep
                     # V7.15: 无论模式都推进 rep 边界计数 + 疲劳
                     self._total_reps_count += 1
@@ -573,7 +628,11 @@ class DumbbellCurlFSM:
 
                     self.state = "STAND"
                     self._min_angle_in_rep = 999
-                    self._last_count_time = time.time()
+                    self._last_count_time = time.time()   # V7.16: rep 冷却锁
+                    # V7.16: 清零 debounce 计数
+                    self._closing_frames = 0
+                    self._opening_frames = 0
+                    self._curling_start_ts = 0.0
                     # V7.13: rep 结算后清空外插追踪, 避免串到下一 rep
                     self._last_valid_angle_cu = None
                     self._last_ang_vel_cu = 0.0
@@ -655,6 +714,36 @@ async def main():
             os.remove(f)
         except OSError:
             pass
+
+    # ===== M10 (V7.16, 2026-04-20): 启动初始化 - 清理所有残留信号文件 =====
+    # 背景: 残留 /dev/shm/user_profile.json 导致 "语音切 curl 后 50ms 被拉回 squat" bug.
+    # 该文件每帧被 main_claw 读取, fallback=squat, 无 mtime 去重 -> 循环覆盖.
+    # 配合清理 inference_mode.json 让重启默认走纯视觉 (与用户验收要求一致).
+    _M10_CLEANUP = [
+        "/dev/shm/user_profile.json",       # UI exercise 选择 (主要污染源)
+        "/dev/shm/exercise_mode.json",      # 语音 exercise 指令
+        "/dev/shm/inference_mode.json",     # 视觉模式 (清后 -> 默认 pure_vision)
+        "/dev/shm/fatigue_limit.json",      # 疲劳上限
+        "/dev/shm/ui_fatigue_limit.json",   # UI 疲劳上限镜像
+        "/dev/shm/next_set.request",        # 下一组请求
+        "/dev/shm/fatigue_reset.request",   # 清零请求
+        "/dev/shm/mvc_calibrate.request",   # MVC 请求
+        "/dev/shm/mvc_calibrate.result",    # MVC 结果
+        "/dev/shm/trigger_deepseek",        # 手动 DeepSeek 触发
+        "/dev/shm/fsm_reset_signal",        # FSM 重置信号
+        "/dev/shm/voice_interrupt",         # 语音打断
+        "/dev/shm/chat_active",             # 对话激活标志
+        "/dev/shm/violation_alert.txt",     # 残留违规警报
+    ]
+    _cleaned = 0
+    for f in _M10_CLEANUP:
+        try:
+            if os.path.exists(f):
+                os.remove(f)
+                _cleaned += 1
+        except OSError:
+            pass
+    logging.info(f"🧹 [M10] 启动清理完成: 移除 {_cleaned} 个残留 shm 信号 (默认 pure_vision + squat)")
 
     # LLM 后端切换: LLM_BACKEND=direct 使用 DeepSeek 直连, 否则走 OpenClaw Gateway
     llm_backend = os.environ.get("LLM_BACKEND", "direct").lower()

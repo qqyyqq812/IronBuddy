@@ -972,6 +972,30 @@ def main():
         except Exception:
             pass
 
+    # ===== M10 (V7.16, 2026-04-20): 语音守护启动初始化 =====
+    # 背景: 上次会话意外中止可能残留以下文件, 让新 session 一启动就误判:
+    #   - chat_active 残留 -> hard_alarm_worker 永远 skip (用户感觉"长期没反应")
+    #   - voice_interrupt 残留 -> 启动第一段 TTS 被立刻掐断
+    #   - mute_signal 残留 muted=true -> 整个语音静默
+    _m10_voice_cleanup = ["/dev/shm/chat_active", "/dev/shm/voice_interrupt"]
+    _v_cleaned = 0
+    for _f in _m10_voice_cleanup:
+        try:
+            if os.path.exists(_f):
+                os.remove(_f)
+                _v_cleaned += 1
+        except OSError:
+            pass
+    # mute_signal 重置为非静音 (覆盖残留 true)
+    try:
+        with open("/dev/shm/mute_signal.json.tmp", "w") as _mf:
+            json.dump({"muted": False, "ts": _startup_now}, _mf)
+        os.rename("/dev/shm/mute_signal.json.tmp", "/dev/shm/mute_signal.json")
+        _is_muted[0] = False
+    except Exception as _e:
+        logging.debug(u"[M10] mute_signal 重置失败: %s", _e)
+    logging.info(u"🧹 [M10] 语音启动清理: 移除 %d 个残留信号, mute=false", _v_cleaned)
+
     # 激活 ALSA mixer 通路 (板载 MIC + SPK)；板重启后 Path 会归零
     ensure_mixer_paths()
 
