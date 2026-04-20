@@ -63,6 +63,33 @@ CHAT_INPUT_FILE = "/dev/shm/chat_input.txt"
 STARTUP_DELAY = 5
 
 
+# ===== V4.8 \u6301\u4e45\u5316\u63a5\u5165 (\u95f2\u804a\u5165\u5e93 + \u52a8\u6001 system_prompt) =====
+# \u61d2\u521d\u59cb\u5316 FitnessDB \u5355\u4f8b; \u5931\u8d25\u65f6\u8fd4\u56de None, \u4e3b\u8def\u5f84\u6c38\u4e0d\u5d29\u3002
+_DB_SINGLETON = None  # type: object
+
+
+def _get_db():
+    # type: () -> object
+    """\u60f0\u6027\u53d6 FitnessDB \u5355\u4f8b\u3002\u4efb\u4f55\u5f02\u5e38\u5403\u6389\u8fd4\u56de None\u3002"""
+    global _DB_SINGLETON
+    if _DB_SINGLETON is not None:
+        return _DB_SINGLETON
+    try:
+        # \u5ef6\u8fdf import, \u907f\u514d voice_daemon \u542f\u52a8\u4f9d\u8d56 sqlite3 (\u5df2\u5185\u7f6e\u6ca1\u98ce\u9669)
+        _root = os.path.dirname(os.path.abspath(__file__))
+        if _root not in sys.path:
+            sys.path.append(_root)
+        from persistence.db import FitnessDB  # noqa
+        _inst = FitnessDB()
+        _inst.connect()
+        _DB_SINGLETON = _inst
+        logging.info(u"[V4.8] FitnessDB \u5355\u4f8b\u5df2\u8fde\u63a5: %s", _inst.path)
+    except Exception as _e:
+        logging.warning(u"[V4.8] FitnessDB \u521d\u59cb\u5316\u5931\u8d25: %s", _e)
+        _DB_SINGLETON = None
+    return _DB_SINGLETON
+
+
 # ===== V7.0 \u62fc\u97f3\u6a21\u7cca\u5339\u914d (\u53d6\u4ee3\u624b\u5de5 _HOMOPHONES) =====
 # \u5e95\u5c42\u60f3\u6cd5: \u767e\u5ea6 ASR \u8fd4\u56de\u9519\u5b57\u65f6,\u62fc\u97f3\u901a\u5e38\u76f8\u8fd1(\u5982\u201c\u73a9\u5177\u201dwanju vs \u201c\u5f2f\u4e3e\u201dwanju)\u3002
 # \u7528 pypinyin \u628a text \u8f6c\u62fc\u97f3 \u2192 \u5728\u786c\u7f16\u7801\u8bcd\u62fc\u97f3\u91cc\u6ed1\u7a97 edit distance \u2192 \u547d\u4e2d\u5c31\u628a\u6b63\u786e\u8bcd\u6ce8\u56de text\u3002
@@ -1159,11 +1186,25 @@ def main():
         logging.info(u"[B路] 闲聊异步: %s", text[:40])
 
         def _async_deepseek(txt):
+            _t0 = time.time()
             try:
                 reply = _try_deepseek_chat(txt)
                 if reply:
                     logging.info(u"\u5f02\u6b65\u95f2\u804a\u56de\u590d: %s", reply[:60])
                     _publish_chat_reply(reply)
+                    # V4.8: \u5199 voice_sessions (\u5931\u8d25\u5403\u6389, \u4e0d\u5f71\u54cd\u56de\u590d\u94fe\u8def)
+                    try:
+                        _db = _get_db()
+                        if _db is not None:
+                            _db.log_voice_session(
+                                trigger_src="chat",
+                                transcript=txt,
+                                response=reply,
+                                duration_s=float(time.time() - _t0),
+                                summary=None,
+                            )
+                    except Exception as _dbe:
+                        logging.warning(u"voice_session log fail: %s", _dbe)
                 else:
                     logging.info(u"\u5f02\u6b65\u95f2\u804a\u5931\u8d25")
                     _speak_ack(u"\u6ca1\u542c\u6e05")
@@ -1677,10 +1718,21 @@ def _try_deepseek_chat(text):
                     int(_fsm.get("fatigue",0)))
         except Exception:
             pass
+        # V4.8: \u52a8\u6001 system_prompt \u2014 \u4ece system_prompt_versions \u8bfb\u53d6\u6700\u65b0 active \u7248\u672c
+        # \u5931\u8d25 (\u65e0\u5e93 / \u65e0 active / \u5f02\u5e38) \u8fd4\u56de fallback, \u4fdd\u8bc1\u95f2\u804a\u4e0d\u65ad\u3002
+        _base_prompt = u"\u4f60\u662f IronBuddy \u5065\u8eab\u6559\u7ec3\u3002"
+        try:
+            _db_ref = _get_db()
+            if _db_ref is not None:
+                _base_prompt = _db_ref.get_active_system_prompt(
+                    fallback=_base_prompt)
+        except Exception as _pe:
+            logging.debug(u"[V4.8] get_active_system_prompt failed: %s", _pe)
         system_prompt = (
-            u"你是 IronBuddy 健身教练。当前时间是 " + _now + u" " + _weekday + u"。"
-            u"用户正在锻炼。" + _stats_ctx + u" "
-            u"回答务必简短:3 句话以内,80 字以内,不使用 markdown。"
+            _base_prompt
+            + u" \u5f53\u524d\u65f6\u95f4:" + _now + u" " + _weekday + u"\u3002"
+            + _stats_ctx
+            + u" \u56de\u7b54\u52a1\u5fc5\u7b80\u77ed:3 \u53e5\u8bdd\u4ee5\u5185,80 \u5b57\u4ee5\u5185,\u4e0d\u4f7f\u7528 markdown\u3002"
         )
         body = json.dumps({
             "model": "deepseek-chat",
@@ -1862,7 +1914,8 @@ def _try_voice_command(client, text):
         _write_signal("/dev/shm/exercise_mode.json", {"mode": "curl", "ts": time.time()})
         if _wait_mode_applied("exercise", "curl", timeout=3.0):
             speak(client, u"\u5df2\u5207\u6362\u5230\u5f2f\u4e3e\u6a21\u5f0f", allow_interrupt=False)
-            speak(client, u"\u51c6\u5907\u597d\u540e\u8bf7\u8bf4 \u5f00\u59cb MCV \u6d4b\u8bd5", allow_interrupt=False)
+            # M9 (V7.15, 2026-04-20): TTS 文案纠正 MCV -> MVC (Maximum Voluntary Contraction)
+            speak(client, u"\u51c6\u5907\u597d\u540e\u8bf7\u8bf4 \u5f00\u59cb MVC \u6d4b\u8bd5", allow_interrupt=False)
             # V7.6: \u5f00\u542f 60s MCV \u7b49\u5f85\u7a97\u53e3, \u671f\u95f4\u4efb\u4f55\u8bc6\u522b\u5230 MCV/\u6d4b\u8bd5 \u90fd\u76f4\u89e6\u53d1(\u514d\u5524\u9192)
             _mcv_wait_until[0] = time.time() + 60.0
             logging.info(u"\u547d\u4ee4: \u5207\u6362\u5230\u5f2f\u4e3e (FSM \u786e\u8ba4 + MCV \u7a97\u53e3 60s)")
