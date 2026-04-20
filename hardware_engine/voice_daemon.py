@@ -499,6 +499,55 @@ _violation_mtime = 0
 _violation_event = threading.Event()
 _violation_text_latest = [""]  # mutable holder for thread communication
 
+# M3 (V7.13, 2026-04-20): 对话期绝对静默
+# 喊"教练"命中的那一刻 set, 整轮对话(ASR + 命令处理 + TTS回复)结束后 clear
+# hard_alarm_worker 看到 is_set() -> 整条 violation 直接丢弃
+# 死上限 30s, 防卡死
+_dialog_active = threading.Event()
+_dialog_set_ts = [0.0]  # mutable holder
+_DIALOG_MAX_SEC = 30.0
+
+
+def _dialog_enter():
+    """M3: 进入对话模式, 屏蔽所有警报 TTS"""
+    _dialog_active.set()
+    _dialog_set_ts[0] = time.time()
+    logging.info(u"[M3_dialog] 进入对话, 警报屏蔽 ON")
+
+
+def _dialog_exit():
+    """M3: 退出对话模式, 恢复警报"""
+    _dialog_active.clear()
+    _dialog_set_ts[0] = 0.0
+    logging.info(u"[M3_dialog] 退出对话, 警报屏蔽 OFF")
+
+
+def _dialog_active_safe():
+    """M3: 带 30s 死上限的查询; 超时自动 clear 防卡死"""
+    if not _dialog_active.is_set():
+        return False
+    if _dialog_set_ts[0] > 0 and (time.time() - _dialog_set_ts[0]) > _DIALOG_MAX_SEC:
+        logging.warning(u"[M3_dialog] 超过 %ds, 强制退出", int(_DIALOG_MAX_SEC))
+        _dialog_exit()
+        return False
+    return True
+
+
+def _wait_sm_idle(timeout_sec):
+    # type: (float) -> bool
+    """M3: 等 SpeechManager 队列播完 + 当前 item 播完.
+    返回 True 表示真空闲, False 表示超时但已退出等待.
+    """
+    _deadline = time.time() + timeout_sec
+    while time.time() < _deadline:
+        try:
+            if _sm._current_prio[0] >= 99 and not _sm._has_pending():
+                return True
+        except Exception:
+            return True
+        time.sleep(0.1)
+    return False
+
 
 # ===== ALSA mixer 路径激活 (参考 main2.py + toybrick_board_rules §2) =====
 # 板载 RK809 codec 掉电后 Playback Path 会归零，Capture MIC Path 默认 OFF。
@@ -1147,10 +1196,18 @@ def main():
             continue
         logging.info(u"[\u5524\u9192] \u547d\u4e2d: %s | \u53bb\u5524\u9192\u540e: %s", text[:30], _stripped[:40])
 
+        # M3: 进入对话状态, 屏蔽所有警报 (含不标准/代偿)
+        _dialog_enter()
+
         # \u6709\u6307\u4ee4 \u2192 \u76f4\u63a5\u8def\u7531\u4e00\u6b21 \u2192 \u56de SLEEP
         if _stripped and len(_stripped) >= 2:
-            _route_text(_stripped)
-            logging.info(u"[\u5355\u8f6e] \u5524\u9192+\u6307\u4ee4\u5904\u7406\u5b8c, \u56de SLEEP")
+            try:
+                _route_text(_stripped)
+                logging.info(u"[\u5355\u8f6e] \u5524\u9192+\u6307\u4ee4\u5904\u7406\u5b8c, \u56de SLEEP")
+            finally:
+                # M3: 等 TTS 回复真播完再退出对话状态 (最多 8s)
+                _wait_sm_idle(8.0)
+                _dialog_exit()
             continue
 
         # V7.3: \u7f29\u77ed ACK \u964d\u4f4e\u5ef6\u8fdf \u2014 "\u55ef" (0.3s TTS) \u66ff\u4ee3 "\u6211\u5728" (1.5s TTS)
@@ -1187,6 +1244,9 @@ def main():
             os.remove("/dev/shm/chat_active")
         except OSError:
             pass
+        # M3: 等 TTS 回复播完再退出对话状态, 避免警报插入
+        _wait_sm_idle(8.0)
+        _dialog_exit()
         logging.info(u"[\u5355\u8f6e] \u5b8c\u6210, \u56de SLEEP")
 
 
@@ -1208,22 +1268,30 @@ def hard_alarm_worker(client):
             if not text:
                 continue
 
-            # V7.8: \u5bf9\u8bdd/\u64ad\u62a5\u4e2d\u5c4f\u853d\u8b66\u62a5 (\u89c6\u89c9\u8bef\u8bc6\u522b\u5f81\u5e38, \u4e0d\u5e72\u6270\u8bed\u97f3\u4ea4\u4e92)
-            # \u89c4\u5219: SpeechManager \u5728\u64ad | chat_active \u6587\u4ef6\u5b58\u5728 | MCV \u7a97\u53e3\u5185 | \u9759\u97f3\u6001 \u2192 \u5168\u90fd\u6295\u4e22
+            # V7.8 + M3: 对话/播报中屏蔽警报
+            # 规则: SpeechManager 在播 | _dialog_active 对话中 | chat_active 文件存在 | MCV 窗口内 | 静音态 -> 丢弃
             _skip = False
+            _skip_reason = ""
             try:
-                if _sm._current_prio[0] < 99:
+                if _dialog_active_safe():
                     _skip = True
+                    _skip_reason = "M3_dialog_active"
+                elif _sm._current_prio[0] < 99:
+                    _skip = True
+                    _skip_reason = "SM_playing"
                 elif os.path.exists("/dev/shm/chat_active"):
                     _skip = True
+                    _skip_reason = "chat_active_file"
                 elif time.time() < _mcv_wait_until[0]:
                     _skip = True
+                    _skip_reason = "MCV_window"
                 elif _is_muted[0]:
                     _skip = True
+                    _skip_reason = "muted"
             except Exception:
                 pass
             if _skip:
-                logging.info(u"[hard_alarm] \u5bf9\u8bdd/\u64ad\u62a5\u4e2d, \u5ffd\u7565\u8b66\u62a5: %s", text)
+                logging.info(u"[hard_alarm] 屏蔽警报 (%s): %s", _skip_reason, text)
                 continue
 
             logging.info("[hard_alarm] \u89e6\u53d1 L0 \u8b66\u62a5 (PRIO_ALARM): %s", text)
