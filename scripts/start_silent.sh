@@ -32,18 +32,27 @@ if [ -f "$CLOUD_KEY" ]; then
     fi
 fi
 
-# [2/3] Deploy (与 start_validation.sh 完全一致)
-echo "[2/3] rsync..."
-rsync -az --checksum -e "ssh -i $BOARD_KEY -o StrictHostKeyChecking=no" \
+# [2/3] Deploy
+# 静音版与 start_validation.sh 的区别: 不再把 rsync 输出吞掉, 加进度 + 超时护栏
+# (--checksum 要遍历全项目, 大仓 30-90s, 无输出容易误判为卡死)
+echo "[2/3] rsync (显示进度, 全量对比需 30-90s, 请耐心)..."
+timeout 300 rsync -az --checksum --info=progress2 --no-inc-recursive \
+    -e "ssh -i $BOARD_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10" \
     --exclude='.git' --exclude='*.tar.gz' --exclude='*.rar' \
     --exclude='docs/hardware_ref' --exclude='backups' --exclude='.agent_memory' \
     --exclude='data' \
-    "$PROJECT_DIR/" $TARGET:/home/toybrick/streamer_v3/ > /dev/null 2>&1
+    "$PROJECT_DIR/" $TARGET:/home/toybrick/streamer_v3/ || {
+    echo "  ❌ rsync 失败或超时 (>300s). 检查: ssh toybrick@10.18.76.224 是否通畅"
+    exit 1
+}
 if [ -f "$PROJECT_DIR/models/extreme_fusion_gru.pt" ]; then
-    scp -i "$BOARD_KEY" -o StrictHostKeyChecking=no \
+    echo "  -> 同步 GRU 模型..."
+    timeout 60 scp -i "$BOARD_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
         "$PROJECT_DIR/models/extreme_fusion_gru.pt" \
-        $TARGET:/home/toybrick/streamer_v3/hardware_engine/cognitive/extreme_fusion_gru.pt > /dev/null 2>&1
+        $TARGET:/home/toybrick/streamer_v3/hardware_engine/cognitive/extreme_fusion_gru.pt > /dev/null 2>&1 || \
+        echo "  ⚠️  GRU 模型同步失败或超时(非致命)"
 fi
+echo "  ✅ rsync 完成"
 
 # [3/3] 板端静音启动
 echo "[3/3] starting board in SILENT mode (voice skipped, amixer muted)..."

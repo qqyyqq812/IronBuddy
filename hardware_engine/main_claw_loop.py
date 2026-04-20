@@ -37,33 +37,48 @@ _gru_frame_ctr   = 0
 # 上一帧 ang_vel (用于在主循环里计算 ang_accel)
 _gru_prev_ang_vel: float = 0.0
 
-def _load_gru_model():
-    """尝试加载 extreme_fusion_gru.pt，支持 7D 和旧 4D 模型。"""
+# 按 exercise 选择权重文件名 (弯举使用独立权重, 避免覆盖深蹲)
+_GRU_WEIGHT_BY_EXERCISE = {
+    "squat":      "extreme_fusion_gru.pt",
+    "bicep_curl": "extreme_fusion_gru_bicep.pt",
+}
+
+def _load_gru_model(exercise="squat"):
+    """尝试加载对应 exercise 的 GRU 权重 (7D), 失败回退 4D.
+
+    优先首选 hardware_engine/<name>.pt, 其次 cognitive/<name>.pt, 最后通用 extreme_fusion_gru.pt.
+    """
     _dir = os.path.dirname(os.path.abspath(__file__))
+    model_name = _GRU_WEIGHT_BY_EXERCISE.get(exercise, "extreme_fusion_gru.pt")
     candidates = [
+        os.path.join(_dir, model_name),
+        os.path.join(_dir, "cognitive", model_name),
+        # 通用兜底 (旧共用权重)
         os.path.join(_dir, "extreme_fusion_gru.pt"),
         os.path.join(_dir, "cognitive", "extreme_fusion_gru.pt"),
     ]
+    tried = set()
     for path in candidates:
-        if os.path.exists(path):
+        if path in tried or not os.path.exists(path):
+            continue
+        tried.add(path)
+        try:
+            model = load_model(path, input_size=7)
+            size_kb = os.path.getsize(path) / 1024
+            logging.info(f"[GRU] Loaded {path} for exercise={exercise} ({size_kb:.1f} KB)")
+            return model
+        except Exception as e:
+            logging.warning(f"[GRU] load_model failed for {path}: {e}")
             try:
-                model = load_model(path, input_size=7)
-                size_kb = os.path.getsize(path) / 1024
-                logging.info(f"[GRU] Loaded {path} ({size_kb:.1f} KB)")
+                model = load_model(path, input_size=4)
+                logging.info(f"[GRU] Loaded 4D-compat model from {path}")
                 return model
-            except Exception as e:
-                logging.warning(f"[GRU] load_model failed for {path}: {e}")
-                # Fallback: try 4D model
-                try:
-                    model = load_model(path, input_size=4)
-                    logging.info(f"[GRU] Loaded 4D-compat model from {path}")
-                    return model
-                except Exception as e2:
-                    logging.warning(f"[GRU] 4D fallback also failed: {e2}")
-    logging.warning("[GRU] No model file found — inference disabled.")
+            except Exception as e2:
+                logging.warning(f"[GRU] 4D fallback also failed: {e2}")
+    logging.warning(f"[GRU] No model file found for exercise={exercise} — inference disabled.")
     return None
 
-_GRU_MODEL = _load_gru_model()
+_GRU_MODEL = _load_gru_model("squat")
 
 # V2.5: 加载教练人格
 _SOUL_TEXT = ""
@@ -102,6 +117,11 @@ class SquatStateMachine:
         # GRU 分类 "compensating" 时递增; 同一 rep(_cur_reps) 只计一次
         self._compensation_count = 0
         self._compensation_last_rep = -1
+        # V7.15: FSM 独立 rep 边界计数 (无关模式). vision_sensor 模式下 good/failed 由 GRU 分类决定
+        self._total_reps_count = 0
+        # V7.15: inference_mode 缓存 (避免每帧读盘)
+        self._mode_cache = "pure_vision"
+        self._mode_last_ts = 0.0
 
     def calculate_angle(self, a, b, c):
         try:
@@ -152,6 +172,7 @@ class SquatStateMachine:
                 "state": self.state,
                 "good": self.good_squats,
                 "failed": self.failed_squats,
+                "comp": getattr(self, "_compensation_count", 0),   # V7.15: 暴露代偿计数
                 "angle": round(current_angle, 1),
                 "fatigue": round(self.total_fatigue_volume, 1),
                 "chat_active": os.path.exists("/dev/shm/chat_active"),
@@ -277,18 +298,37 @@ class SquatStateMachine:
                 # 只要起身到 145，就立刻结账，不必等完全 150，这极大防止了计数丢失
                 if angle > 145:
                     bottom = self._min_angle_in_rep
+                    # V7.15: 无论模式都推进 rep 边界计数 + 疲劳 (外层 GRU 推理靠此触发)
+                    self._total_reps_count += 1
+                    volume = 1500.0 / 7.0
+                    self.total_fatigue_volume += volume
 
-                    if bottom < self.ANGLE_STANDARD:
-                        # 完美深蹲
-                        self.good_squats += 1
-                        volume = 1500.0 / 7.0  # 调整：7个动作即刻满级！
-                        self.total_fatigue_volume += volume
-                        logging.info(f"🟢 好球！（角度{bottom:.0f}°）当前总疲劳值: {self.total_fatigue_volume:.1f}")
+                    # V7.15: 读 inference_mode (100ms 缓存), 决定是否走角度硬判定
+                    now_for_mode = time.time()
+                    if now_for_mode - self._mode_last_ts > 0.1:
+                        try:
+                            if os.path.exists("/dev/shm/inference_mode.json"):
+                                with open("/dev/shm/inference_mode.json", "r") as _mf:
+                                    m = json.load(_mf).get("mode", "pure_vision")
+                                    if m in ("pure_vision", "vision_sensor"):
+                                        self._mode_cache = m
+                        except Exception:
+                            pass
+                        self._mode_last_ts = now_for_mode
+
+                    if self._mode_cache == "vision_sensor":
+                        # V7.15: vision_sensor 模式 — good/failed/comp 由外层 GRU 分类决定
+                        # 不在此处累加, 不触发"不标准"警报
+                        logging.info(f"⏳ [vision_sensor] rep #{self._total_reps_count} 角度{bottom:.0f}° 等待 GRU 分类")
                     else:
-                        # 行程不足
-                        self.failed_squats += 1
-                        self.trigger_buzzer_alert()
-                        logging.warning(f"🟡 违规：下蹲幅度不足！（当前最低{bottom:.0f}°）累计违规：{self.failed_squats}")
+                        # pure_vision 模式 — 保留角度硬判定
+                        if bottom < self.ANGLE_STANDARD:
+                            self.good_squats += 1
+                            logging.info(f"🟢 好球！（角度{bottom:.0f}°）当前总疲劳值: {self.total_fatigue_volume:.1f}")
+                        else:
+                            self.failed_squats += 1
+                            self.trigger_buzzer_alert()
+                            logging.warning(f"🟡 违规：下蹲幅度不足！（当前最低{bottom:.0f}°）累计违规：{self.failed_squats}")
 
                     # 结算完毕，复位回归直立监控区
                     self.state = "STAND"
@@ -336,6 +376,10 @@ class DumbbellCurlFSM:
         # M8 (V7.14): 弯举动作也要有代偿计数, prompt 统一
         self._compensation_count = 0
         self._compensation_last_rep = -1
+        # V7.15: FSM 独立 rep 边界计数 (无关模式)
+        self._total_reps_count = 0
+        self._mode_cache = "pure_vision"
+        self._mode_last_ts = 0.0
 
     @property
     def good_squats(self): return self._good_reps
@@ -395,6 +439,7 @@ class DumbbellCurlFSM:
                 "state": self.state,
                 "good": self._good_reps,
                 "failed": self._failed_reps,
+                "comp": getattr(self, "_compensation_count", 0),   # V7.15
                 "angle": round(current_angle, 1),
                 "fatigue": round(self.total_fatigue_volume, 1),
                 "chat_active": os.path.exists("/dev/shm/chat_active"),
@@ -497,15 +542,34 @@ class DumbbellCurlFSM:
 
                 if angle > 145:
                     bottom = self._min_angle_in_rep
-                    if bottom < self.ANGLE_STANDARD:
-                        self._good_reps += 1
-                        volume = 1500.0 / 7.0
-                        self.total_fatigue_volume += volume
-                        logging.info(f"🟢 弯举达标！（顶峰角度{bottom:.0f}°）总疲劳值: {self.total_fatigue_volume:.1f}")
+                    # V7.15: 无论模式都推进 rep 边界计数 + 疲劳
+                    self._total_reps_count += 1
+                    volume = 1500.0 / 7.0
+                    self.total_fatigue_volume += volume
+
+                    # V7.15: 读 inference_mode (100ms 缓存)
+                    now_for_mode = time.time()
+                    if now_for_mode - self._mode_last_ts > 0.1:
+                        try:
+                            if os.path.exists("/dev/shm/inference_mode.json"):
+                                with open("/dev/shm/inference_mode.json", "r") as _mf:
+                                    m = json.load(_mf).get("mode", "pure_vision")
+                                    if m in ("pure_vision", "vision_sensor"):
+                                        self._mode_cache = m
+                        except Exception:
+                            pass
+                        self._mode_last_ts = now_for_mode
+
+                    if self._mode_cache == "vision_sensor":
+                        logging.info(f"⏳ [vision_sensor] 弯举 rep #{self._total_reps_count} 顶峰{bottom:.0f}° 等待 GRU 分类")
                     else:
-                        self._failed_reps += 1
-                        self.trigger_buzzer_alert()
-                        logging.warning(f"🟡 弯举违规：收缩幅度不足！（收缩极限仅有{bottom:.0f}°）累计违规：{self._failed_reps}")
+                        if bottom < self.ANGLE_STANDARD:
+                            self._good_reps += 1
+                            logging.info(f"🟢 弯举达标！（顶峰角度{bottom:.0f}°）总疲劳值: {self.total_fatigue_volume:.1f}")
+                        else:
+                            self._failed_reps += 1
+                            self.trigger_buzzer_alert()
+                            logging.warning(f"🟡 弯举违规：收缩幅度不足！（收缩极限仅有{bottom:.0f}°）累计违规：{self._failed_reps}")
 
                     self.state = "STAND"
                     self._min_angle_in_rep = 999
@@ -581,6 +645,9 @@ async def _deepseek_fire_and_forget(bridge, prompt, good_count, failed_count):
 
 
 async def main():
+    # 必须在函数顶部声明 global, 因为下方 909/920 行会读 _GRU_MODEL,
+    # 982 行才赋值; Python 3 要求 global 声明先于任何读写
+    global _GRU_MODEL
     logging.info("🚀 启动 IronBuddy V3 双轨融合状态机中枢...")
 
     for f in ["/dev/shm/llm_reply.txt", "/dev/shm/chat_input.txt", "/dev/shm/chat_reply.txt"]:
@@ -746,8 +813,16 @@ async def main():
                     try:
                         with open("/dev/shm/muscle_activation.json", "r") as mf:
                             m_data = json.load(mf)
-                            target_emg = m_data.get("activations", {}).get("glutes", 0.0)
-                            comp_emg = m_data.get("activations", {}).get("biceps", 0.0)
+                            acts = m_data.get("activations", {})
+                            # exercise 感知 key 路由 (对齐 udp_emg_server.py:313-326)
+                            # 弯举: udp_emg 把 target_pct 写到 biceps, comp_pct 写到 glutes
+                            # 深蹲: udp_emg 把 target_pct 写到 glutes,  comp_pct 写到 biceps
+                            if current_exercise == "bicep_curl":
+                                target_emg = acts.get("biceps", 0.0)
+                                comp_emg   = acts.get("glutes", 0.0)
+                            else:
+                                target_emg = acts.get("glutes", 0.0)
+                                comp_emg   = acts.get("biceps", 0.0)
                     except:
                         pass
 
@@ -797,9 +872,12 @@ async def main():
                         _gru_feature_buf.pop(0)
 
                     # GRU 推理：仅在一个完整动作结束时触发
-                    # 检测 rep 计数是否变化（good 或 failed 增加了）
-                    _cur_reps = getattr(fsm, 'good_squats', 0) + getattr(fsm, 'failed_squats', 0) + \
-                                getattr(fsm, '_good_reps', 0) + getattr(fsm, '_failed_reps', 0)
+                    # V7.15: 用 FSM 独立的 _total_reps_count (vision_sensor 模式下 good/failed 不自增)
+                    _cur_reps = getattr(fsm, '_total_reps_count', 0)
+                    if _cur_reps == 0:
+                        # 回退: 旧逻辑兼容 (pure_vision 下 good+failed)
+                        _cur_reps = getattr(fsm, 'good_squats', 0) + getattr(fsm, 'failed_squats', 0) + \
+                                    getattr(fsm, '_good_reps', 0) + getattr(fsm, '_failed_reps', 0)
                     if not hasattr(fsm, '_prev_total_reps'):
                         fsm._prev_total_reps = _cur_reps
                     # V7.14 FIX: 拆分 DB 路径与 GRU 路径的 rep 推进计数器, 否则 DB 路径先推
@@ -844,25 +922,31 @@ async def main():
                                 window[:, 2]  = np.clip(window[:, 2] / 10.0, -1.0, 1.0)
                                 nn_result = _GRU_MODEL.infer(window)
                                 cls_cn = {"standard":"标准","compensating":"代偿","non_standard":"错误"}
+                                _cls = nn_result.get("classification", "unknown")
                                 logging.info(f"🧠 [GRU] 第{_cur_reps}个动作判定: "
                                              f"相似度={nn_result['similarity']:.3f} "
-                                             f"分类={cls_cn.get(nn_result['classification'], nn_result['classification'])} "
+                                             f"分类={cls_cn.get(_cls, _cls)} "
                                              f"置信度={nn_result['confidence']:.3f}")
-                                # V7.6: GRU 检测到代偿 → 独立警报"代偿"
-                                # M8 (V7.14): 同步递增 _compensation_count 供总结 prompt 使用
-                                #            防重复: 同一 rep 只计一次 (_cur_reps 单调递增)
-                                if nn_result.get("classification") == "compensating":
+                                # V7.15: vision_sensor 模式 — 按 GRU 分类累加 good/failed/comp
+                                # (FSM DESCENDING/CURLING 分支在 vision_sensor 下已跳过这些累加)
+                                if _cls == "standard":
+                                    fsm.good_squats = getattr(fsm, 'good_squats', 0) + 1
+                                elif _cls == "non_standard":
+                                    fsm.failed_squats = getattr(fsm, 'failed_squats', 0) + 1
+                                    try:
+                                        fsm.trigger_buzzer_alert(kind="不标准")
+                                    except Exception:
+                                        pass
+                                elif _cls == "compensating":
                                     try:
                                         fsm.trigger_buzzer_alert(kind="代偿")
                                     except Exception:
                                         pass
-                                    try:
-                                        if _cur_reps != fsm._compensation_last_rep:
-                                            fsm._compensation_count += 1
-                                            fsm._compensation_last_rep = _cur_reps
-                                            logging.info(f"📊 [M8] 代偿计数 -> {fsm._compensation_count} (rep={_cur_reps})")
-                                    except Exception as _ce:
-                                        logging.debug(f"[M8] 代偿计数异常: {_ce}")
+                                    # 防重复累加
+                                    if _cur_reps != fsm._compensation_last_rep:
+                                        fsm._compensation_count += 1
+                                        fsm._compensation_last_rep = _cur_reps
+                                        logging.info(f"📊 [M8] 代偿计数 -> {fsm._compensation_count} (rep={_cur_reps})")
                             except Exception as _e:
                                 logging.debug(f"[GRU] infer error: {_e}")
 
@@ -897,6 +981,10 @@ async def main():
                         fsm = DumbbellCurlFSM()
                     else:
                         fsm = SquatStateMachine()
+                    # 重载对应 exercise 的 GRU 权重 + 清滑窗, 防首个 rep 串入上一 exercise 的特征
+                    # (global 声明已移至 main() 顶部)
+                    _GRU_MODEL = _load_gru_model(current_exercise)
+                    _gru_feature_buf.clear()
                     fsm.sync_to_frontend()
             except Exception:
                 pass
