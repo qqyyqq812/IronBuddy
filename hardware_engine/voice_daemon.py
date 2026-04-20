@@ -216,6 +216,59 @@ COMMAND_INTENT_WORDS = (
 _ACTION_NAMES = (u"\u6df1\u8e72", u"\u5f2f\u4e3e", u"\u54d1\u94c3", u"\u8e72\u8d77")
 _EXPLICIT_CMD_MARKERS = (u"\u5207\u6362", u"\u5207\u5230", u"\u6362\u5230", u"\u505a", u"\u5f00\u59cb", u"\u6a21\u5f0f")
 
+# ===== M1 (V7.13, 2026-04-20): 更灵敏的唤醒词识别 =====
+# 原策略: any(w in text for w in WAKE_WORDS) 严格字串包含 -> 百度 ASR 错 1 个字就漏
+# 升级: 1) 原字串 2) 拼音片段 3) 短文本编辑距离<=2
+_WAKE_PINYIN_PATS = (
+    u"jiaolian", u"jiaoli", u"jiaol",
+    u"jiaoni", u"jiaony",
+    u"jieli", u"jial", u"jiaoy",
+    u"jiaolan", u"jiaoliang",
+    u"tiege", u"tieg",
+    u"coach",
+)
+
+
+def _is_wake_word(text):
+    # type: (str) -> (bool, str)
+    """M1: 返回 (hit, stripped_text).
+    三级匹配:
+      1) WAKE_WORDS 原字串包含 (向后兼容, 最快)
+      2) 全拼音串包含 _WAKE_PINYIN_PATS 任一片段
+      3) 短文本 (<=5字) 拼音编辑距离 <= 2 于 'jiaolian'
+    stripped_text: 去掉所有唤醒词后的剩余文本, 用于 route.
+    """
+    if not text:
+        return False, u""
+    # 1) 原字串包含
+    for w in WAKE_WORDS:
+        if w in text:
+            stripped = text
+            for w2 in WAKE_WORDS:
+                stripped = stripped.replace(w2, u"")
+            return True, stripped.strip(u" ,.!?\u3002\uff0c\uff01\uff1f")
+    # 2) 拼音片段
+    if _PINYIN_AVAILABLE:
+        try:
+            py = u"".join(_lazy_pinyin(text))
+            for pat in _WAKE_PINYIN_PATS:
+                if pat in py:
+                    logging.info(u"[M1_wake] \u62fc\u97f3\u7247\u6bb5\u547d\u4e2d '%s' in '%s'", pat, py[:30])
+                    return True, text
+        except Exception:
+            pass
+    # 3) 短文本拼音编辑距离
+    if _PINYIN_AVAILABLE and len(text) <= 5:
+        try:
+            py = u"".join(_lazy_pinyin(text))
+            if py and (_edit_distance(py, u"jiaolian") <= 2 or _edit_distance(py, u"jiaol") <= 1):
+                logging.info(u"[M1_wake] \u7f16\u8f91\u8ddd\u79bb\u547d\u4e2d py=%s", py[:20])
+                return True, u""
+        except Exception:
+            pass
+    return False, u""
+
+
 def _is_command_intent(text):
     # type: (str) -> bool
     """V7.5 \u5224\u65ad\u7528\u6237\u610f\u56fe: \u7cbe\u786e\u5b50\u4e32 + \u62fc\u97f3\u6a21\u7cca (\u9632 ASR \u8fd1\u97f3\u8bef\u8bc6\u522b)"""
@@ -1076,22 +1129,11 @@ def main():
             _route_text(text)
             continue
 
-        # \u68c0\u67e5\u5524\u9192\u8bcd
-        is_wake = any(w in text for w in WAKE_WORDS)
+        # M1: \u62fc\u97f3+\u7f16\u8f91\u8ddd\u79bb\u5bbd\u677e\u5524\u9192 (\u539f: \u4e25\u683c\u5b57\u4e32\u5305\u542b)
+        is_wake, _stripped = _is_wake_word(text)
         if not is_wake:
             logging.info(u"\u975e\u5524\u9192\u8bed\u53e5 (SLEEP),\u5ffd\u7565: %s", text[:40])
             continue
-
-        # \u63d0\u53d6\u5524\u9192\u8bcd\u540e\u7684\u5269\u4f59\u6587\u672c
-        remaining = ""
-        for w in WAKE_WORDS:
-            if w in text:
-                remaining = text.split(w, 1)[-1].strip()
-                if remaining:
-                    break
-        _stripped = remaining
-        for w in WAKE_WORDS:
-            _stripped = _stripped.replace(w, "").strip(u" ,\u3002\uff0c.!\uff01\uff1f?")
         logging.info(u"[\u5524\u9192] \u547d\u4e2d: %s | \u53bb\u5524\u9192\u540e: %s", text[:30], _stripped[:40])
 
         # \u6709\u6307\u4ee4 \u2192 \u76f4\u63a5\u8def\u7531\u4e00\u6b21 \u2192 \u56de SLEEP
