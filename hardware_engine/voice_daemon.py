@@ -1726,8 +1726,24 @@ def _chat_reply_watcher():
 
 
 def _try_deepseek_chat(text):
-    """V4.8 闲聊 fallback: 如果用户说的不是命令,直接调 DeepSeek 问答,保持 3 句话内."""
+    """V4.8 闲聊 fallback: 如果用户说的不是命令,直接调 DeepSeek 问答,保持 3 句话内.
+    M13 (V7.21, 2026-04-20): env 缺失时从 .api_config.json 热加载 (与 BAIDU 热加载对齐),
+    避免 voice_daemon 不经 start_voice_with_env.sh 启动时 DeepSeek 总是"网络有点慢"."""
     api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+    if not api_key:
+        try:
+            _cfg_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                ".api_config.json")
+            if os.path.exists(_cfg_path):
+                with open(_cfg_path, "r") as _cf:
+                    _cfg = json.load(_cf)
+                api_key = (_cfg.get("DEEPSEEK_API_KEY") or _cfg.get("deepseek_api_key") or "").strip()
+                if api_key:
+                    os.environ["DEEPSEEK_API_KEY"] = api_key  # 缓存到 env, 避免每次调用重读磁盘
+                    logging.info(u"[M13] DeepSeek API key 从 .api_config.json 热加载成功")
+        except Exception as _hke:
+            logging.debug(u"[M13] 热加载 DeepSeek API key 失败: %s", _hke)
     if not api_key or len(text) < 3:
         return None
     try:
