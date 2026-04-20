@@ -1146,6 +1146,15 @@ def main():
             _speak_ack(u"没听清")
             return True
 
+        # M7: B 路保守化 — 长度护栏 + M5 邻近拦截
+        # 规则:
+        #  (a) len<4 或 len>15 直接拒 LLM, 避免 ASR 幻觉走 DeepSeek
+        #  (b) 与 M5 两个 canonical 的拼音编辑距离 ≤ 3 时, 强制回落 M5
+        if not _m7_allow_b_route(text):
+            logging.info(u"[M7] B 路保守化拦截: %s", text[:40])
+            _speak_ack(u"没听清")
+            return True
+
         # 4) B 路: 闲聊 -> DeepSeek 异步 (M4 已写 chat_input, 此处不再重复写)
         logging.info(u"[B路] 闲聊异步: %s", text[:40])
 
@@ -1382,6 +1391,36 @@ HARDCODE_CHATS = [
                         u"xitong", u"xiteng", u"suantong", u"zenmeban"),
     },
 ]
+
+
+def _m7_allow_b_route(text):
+    # type: (str) -> bool
+    """M7 (V7.13, 2026-04-20): 判断文本是否允许走 B 路(DeepSeek 闲聊).
+    过严的长度护栏 + 与 M5 canonical 的拼音距离检查.
+    防止 ASR 错听的短促闲聊输入被 LLM 自由发挥("假装理解"返回).
+    """
+    if not text:
+        return False
+    L = len(text)
+    if L < 4:
+        return False  # 3 字内几乎肯定是错听
+    if L > 15:
+        return False  # 健身场景正常闲聊 ≤ 15 字
+    # 拼音邻近 M5 -> 让 M5 来处理, 不要在 B 路发散
+    if _PINYIN_AVAILABLE:
+        try:
+            py = u"".join(_lazy_pinyin(text))
+            for entry in HARDCODE_CHATS:
+                cpy = u"".join(_lazy_pinyin(entry["canonical"]))
+                # 子串即算相似, 或编辑距离小于 4
+                if cpy in py or py in cpy:
+                    return False
+                # 对短文本做全量距离, 长文本做滑窗
+                if min(len(py), len(cpy)) <= 8 and _edit_distance(py, cpy) <= 3:
+                    return False
+        except Exception:
+            pass
+    return True
 
 
 def _try_hardcode_chat(text):
