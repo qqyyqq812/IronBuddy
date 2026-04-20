@@ -1,0 +1,160 @@
+{
+  "generated_at": "2026-04-18T00:10:38",
+  "summary": {
+    "passes": 30,
+    "fails": 0,
+    "warns": 0
+  },
+  "details": [
+    {
+      "level": "PASS",
+      "msg": "用户数 3 ≥ 要求 3",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01: anthropometry.json 存在",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01: MVC protocol = SENIAM-2000",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01: peak_mvc ch0=780.8 ch1=443.1",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01/curl/standard: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01/curl/compensation: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01/curl/bad_form: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01/squat/standard: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01/squat/compensation: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_01/squat/bad_form: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02: anthropometry.json 存在",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02: MVC protocol = SENIAM-2000",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02: peak_mvc ch0=818.2 ch1=473.4",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02/curl/standard: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02/curl/compensation: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02/curl/bad_form: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02/squat/standard: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02/squat/compensation: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_02/squat/bad_form: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03: anthropometry.json 存在",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03: MVC protocol = SENIAM-2000",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03: peak_mvc ch0=763.1 ch1=513.5",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03/curl/standard: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03/curl/compensation: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03/curl/bad_form: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03/squat/standard: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03/squat/compensation: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "user_03/squat/bad_form: 15 rep ≥ 10",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "总 rep 数 270 ≥ 最低要求 180",
+      "extra": {}
+    },
+    {
+      "level": "PASS",
+      "msg": "总 rep 数 270 ≥ 目标 270",
+      "extra": {}
+    }
+  ]
+}

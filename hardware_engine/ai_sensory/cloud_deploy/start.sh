@@ -64,7 +64,7 @@ while [ $ELAPSED -lt $MAX_WAIT ]; do
         echo "  Logs:      tail -f $LOG"
         echo ""
         echo "  NOTE: Access from board via SSH tunnel:"
-        echo "    ssh -p 14191 -N -L $PORT:localhost:$PORT root@connect.westd.seetacloud.com"
+        echo "    ssh -p 42924 -N -L $PORT:localhost:$PORT root@connect.westd.seetacloud.com  # V4.5 2026-04-18 新实例端口"
         exit 0
     fi
     echo "[Wait] ${ELAPSED}s ..."

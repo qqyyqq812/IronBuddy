@@ -33,6 +33,9 @@ Thumbs.db
 .env
 .env.local
 *.key
+.api_config.json
+.ironbuddy/
+.ironbuddy/secrets.env
 
 # Sprint5 SQLite 持久化（不入仓）
 data/ironbuddy.db

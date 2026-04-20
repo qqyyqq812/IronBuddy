@@ -3,7 +3,7 @@ import sys
 
 password = 'OmloGl2JXBK0'
 host = 'root@connect.westd.seetacloud.com'
-port = '14191'
+port = '42924'  # V4.5 2026-04-18 新实例端口
 
 # 1. SCP 上传 Cloud_RTMPose_Receiver.py
 print("开始上传 Receiver 到云端...")

@@ -4,6 +4,7 @@ DeepSeek Direct Connection — 绕过 WebSocket Gateway，直连 DeepSeek API
 提供与 OpenClawBridge 相同的 ask() 接口，支持 conversation history
 """
 import os
+import time
 import json
 import logging
 import collections
@@ -57,7 +58,7 @@ class DeepSeekDirect(object):
         return True
 
     # ---- 核心：ask 接口（与 OpenClawBridge.ask 签名一致） ----
-    async def ask(self, text, timeout=60, generate_new_session=True):
+    async def ask(self, text, timeout=20, generate_new_session=True):
         if not self.api_key:
             return "DeepSeek API Key 未配置"
         if not HAS_REQUESTS:
@@ -172,8 +173,10 @@ class DeepSeekDirect(object):
             return False
 
     # ---- 同步 HTTP 请求（流式 SSE） ----
-    def _sync_chat(self, messages):
-        """同步调用 DeepSeek chat/completions，使用流式 SSE 获取更快的首 token"""
+    def _sync_chat(self, messages, retries=2):
+        """同步调用 DeepSeek chat/completions，使用流式 SSE 获取更快的首 token。
+        加入超时/断线重试：指数退避 (2^attempt 秒)，避免瞬时网络抖动导致 _ds_lock 卡死。
+        """
         url = self.base_url + "/chat/completions"
         headers = {
             "Authorization": "Bearer " + self.api_key,
@@ -184,37 +187,53 @@ class DeepSeekDirect(object):
             "messages": messages,
             "stream": True,
             "temperature": 0.7,
+            "max_tokens": 80,  # V7.10 限 80 tokens (~30 汉字), 提速+杜绝长篇
         }
 
-        resp = requests.post(url, headers=headers, json=payload,
-                             stream=True, timeout=55)
-        resp.raise_for_status()
+        last_exc = None
+        for attempt in range(retries):
+            try:
+                resp = requests.post(url, headers=headers, json=payload,
+                                     stream=True, timeout=15)
+                resp.raise_for_status()
 
-        full_text = []
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            # SSE 格式: "data: {...}" 或 "data: [DONE]"
-            if line.startswith("data: "):
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data_str)
-                    delta = chunk.get("choices", [{}])[0].get("delta", {})
-                    content = delta.get("content", "")
-                    if content:
-                        full_text.append(content)
-                except (json.JSONDecodeError, IndexError, KeyError):
+                full_text = []
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    # SSE 格式: "data: {...}" 或 "data: [DONE]"
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                full_text.append(content)
+                        except (json.JSONDecodeError, IndexError, KeyError):
+                            continue
+
+                result = "".join(full_text)
+
+                # 去除 <think>...</think> 推理块
+                if "</think>" in result:
+                    result = result.split("</think>")[-1].strip()
+
+                return result
+            except (requests.Timeout, requests.ConnectionError) as exc:
+                last_exc = exc
+                if attempt < retries - 1:
+                    wait = 2 ** attempt
+                    logging.warning("[DeepSeek] 超时/断线, %ss 后重试 (%d/%d): %s",
+                                    wait, attempt + 1, retries, exc)
+                    time.sleep(wait)
                     continue
-
-        result = "".join(full_text)
-
-        # 去除 <think>...</think> 推理块
-        if "</think>" in result:
-            result = result.split("</think>")[-1].strip()
-
-        return result
+                raise
+        if last_exc is not None:
+            raise last_exc
+        return ""
 
 
 if __name__ == "__main__":

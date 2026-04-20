@@ -51,6 +51,9 @@ launch mainloop python3 -u hardware_engine/main_claw_loop.py
 launch emg      python3 -u hardware_engine/sensor/udp_emg_server.py
 launch voice    bash "$ROOT/scripts/start_voice_with_env.sh"
 
+# 5b. Cloud RTMPose SSH tunnel (idempotent — no-op if already running)
+bash "$(dirname "$0")/cloud_tunnel.sh" || echo "[start_all] cloud tunnel failed; will fallback to local NPU"
+
 # 6. Verify each service survived
 sleep 4
 RC=0

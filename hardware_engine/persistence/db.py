@@ -10,6 +10,7 @@ IronBuddy SQLite 持久化层
 """
 
 import os
+import json
 import sqlite3
 import threading
 import logging
@@ -374,6 +375,369 @@ class FitnessDB(object):
         except Exception as e:
             logging.warning("[FitnessDB] compute_daily_summary failed: %s", e)
             return {}
+
+    # ---------- V4.7 扩展：后端记忆闭环所需 ----------
+    def get_recent_chats(self, days=14):
+        """返回最近 N 天的 llm_log 记录，用于 OpenClaw 长期记忆注入。
+
+        返回: [{ts, trigger, prompt, response}, ...] 按 ts DESC 排序
+        失败时返回空列表，不抛异常。
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return []
+            with self._lock:
+                start = (
+                    datetime.now() - timedelta(days=int(days))
+                ).strftime("%Y-%m-%d %H:%M:%S")
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT ts, trigger, prompt, response FROM llm_log "
+                    "WHERE ts >= ? ORDER BY ts DESC",
+                    (start,),
+                )
+                return [dict(r) for r in cur.fetchall()]
+        except Exception as e:
+            logging.warning("[FitnessDB] get_recent_chats failed: %s", e)
+            return []
+
+    def get_user_preferences(self):
+        """返回 user_config 表中所有 key 以 'user_preference.' 开头的偏好。
+
+        返回: {key: value} 字典（key 保留完整前缀）
+        失败时返回空 dict。
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return {}
+            with self._lock:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT key, value FROM user_config "
+                    "WHERE key LIKE 'user_preference.%'"
+                )
+                return {row["key"]: row["value"] for row in cur.fetchall()}
+        except Exception as e:
+            logging.warning("[FitnessDB] get_user_preferences failed: %s", e)
+            return {}
+
+    def set_user_preference(self, key, value):
+        """写入一条偏好。自动补全 'user_preference.' 前缀（若未带）。
+
+        使用 INSERT OR REPLACE 语义（兼容 ON CONFLICT 不支持的旧 SQLite）。
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return
+            k = str(key or "").strip()
+            if not k:
+                return
+            if not k.startswith("user_preference."):
+                k = "user_preference." + k
+            with self._lock:
+                conn.execute(
+                    "INSERT OR REPLACE INTO user_config (key, value, updated_at) "
+                    "VALUES (?, ?, ?)",
+                    (k, str(value), _now()),
+                )
+                conn.commit()
+        except Exception as e:
+            logging.warning("[FitnessDB] set_user_preference failed: %s", e)
+
+    # ---------- V4.8 扩展：语音会话 / 偏好演化 / system_prompt 版本化 ----------
+    def log_voice_session(self, trigger_src, transcript, response,
+                          duration_s=0.0, summary=None):
+        """写入一条 voice_sessions（闲聊或语音问答）。
+
+        - ts 用 ISO8601（本地时间），is_demo_seed=0
+        - 任何异常吞掉，返回 None；成功返回 lastrowid
+        - summary 留空时由 daemon 批量回填
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return None
+            with self._lock:
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO voice_sessions "
+                    "(ts, transcript, response, summary, duration_s, "
+                    "trigger_src, is_demo_seed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 0)",
+                    (
+                        datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                        str(transcript or "")[:4000],
+                        str(response or "")[:4000],
+                        (str(summary)[:2000]) if summary else None,
+                        float(duration_s or 0.0),
+                        str(trigger_src or "chat"),
+                    ),
+                )
+                conn.commit()
+                return cur.lastrowid
+        except Exception as e:
+            logging.warning("[FitnessDB] log_voice_session failed: %s", e)
+            return None
+
+    def get_active_system_prompt(self, fallback=""):
+        """返回当前 active=1 的 system_prompt_versions.prompt_text。
+
+        无活动记录时返回 fallback（默认空串）。
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return fallback
+            with self._lock:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT prompt_text FROM system_prompt_versions "
+                    "WHERE active=1 ORDER BY id DESC LIMIT 1"
+                )
+                row = cur.fetchone()
+                if row is None or not row["prompt_text"]:
+                    return fallback
+                return row["prompt_text"]
+        except Exception as e:
+            logging.warning(
+                "[FitnessDB] get_active_system_prompt failed: %s", e)
+            return fallback
+
+    def get_user_preferences_snapshot(self):
+        """返回 user_config 全表快照为 dict。
+
+        兼容两种 key：带 'user_preference.' 前缀与不带前缀。
+        - 读取时**优先**使用不带前缀的 key；若只有带前缀的版本则剥离前缀后放入 dict。
+        - 失败时返回空 dict。
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return {}
+            with self._lock:
+                cur = conn.cursor()
+                cur.execute("SELECT key, value FROM user_config")
+                rows = cur.fetchall()
+            raw = {}
+            for r in rows:
+                raw[r["key"]] = r["value"]
+            snap = {}
+            # 先灌入带前缀的（低优先级）
+            for k, v in raw.items():
+                if k.startswith("user_preference."):
+                    snap[k[len("user_preference."):]] = v
+            # 再用不带前缀覆盖（高优先级）
+            for k, v in raw.items():
+                if not k.startswith("user_preference."):
+                    snap[k] = v
+            return snap
+        except Exception as e:
+            logging.warning(
+                "[FitnessDB] get_user_preferences_snapshot failed: %s", e)
+            return {}
+
+    def record_preference_change(self, field, old_value, new_value,
+                                 source, confidence):
+        """写 preference_history 一行，同时同步 user_config。
+
+        同步规则：
+          - 若存在 `field` 的 key，UPDATE 它
+          - 否则若存在 `user_preference.{field}` 的 key，UPDATE 它
+          - 否则 INSERT 新的 `field`（不带前缀）
+        失败吞异常，返回 None；成功返回 history id。
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return None
+            field_s = str(field or "").strip()
+            if not field_s:
+                return None
+            new_s = "" if new_value is None else str(new_value)
+            old_s = None if old_value is None else str(old_value)
+            conf = float(confidence or 0.0)
+            source_s = str(source or "rule_engine")
+            now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            with self._lock:
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO preference_history "
+                    "(ts, field, old_value, new_value, source, "
+                    "confidence, is_demo_seed) "
+                    "VALUES (?, ?, ?, ?, ?, ?, 0)",
+                    (now_iso, field_s, old_s, new_s, source_s, conf),
+                )
+                history_id = cur.lastrowid
+                # 同步 user_config
+                prefixed = "user_preference." + field_s
+                cur.execute(
+                    "SELECT key FROM user_config WHERE key IN (?, ?)",
+                    (field_s, prefixed),
+                )
+                existing = {r["key"] for r in cur.fetchall()}
+                ts_short = _now()
+                if field_s in existing:
+                    conn.execute(
+                        "UPDATE user_config SET value=?, updated_at=? "
+                        "WHERE key=?",
+                        (new_s, ts_short, field_s),
+                    )
+                elif prefixed in existing:
+                    conn.execute(
+                        "UPDATE user_config SET value=?, updated_at=? "
+                        "WHERE key=?",
+                        (new_s, ts_short, prefixed),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO user_config (key, value, updated_at) "
+                        "VALUES (?, ?, ?)",
+                        (field_s, new_s, ts_short),
+                    )
+                conn.commit()
+                return history_id
+        except Exception as e:
+            logging.warning(
+                "[FitnessDB] record_preference_change failed: %s", e)
+            return None
+
+    def create_system_prompt_version(self, prompt_text,
+                                     based_on_summary_ids=None):
+        """新建一条 system_prompt_versions，自动把旧 active=1 降级为 0。
+
+        - based_on_summary_ids: list/tuple，序列化为 JSON 存入
+        - 成功后把新 id 写入 user_config.`last_prompt_version` 和
+          `user_preference.last_prompt_version`（两种 key 都更新/插入）
+        - 失败返回 None
+        """
+        try:
+            conn = self._ensure()
+            if conn is None:
+                return None
+            if not prompt_text:
+                return None
+            try:
+                ids_json = json.dumps(list(based_on_summary_ids or []))
+            except Exception:
+                ids_json = "[]"
+            now_iso = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            with self._lock:
+                cur = conn.cursor()
+                cur.execute(
+                    "UPDATE system_prompt_versions SET active=0 "
+                    "WHERE active=1"
+                )
+                cur.execute(
+                    "INSERT INTO system_prompt_versions "
+                    "(ts, prompt_text, based_on_summary_ids, active, "
+                    "is_demo_seed) VALUES (?, ?, ?, 1, 0)",
+                    (now_iso, str(prompt_text), ids_json),
+                )
+                new_id = cur.lastrowid
+                ts_short = _now()
+                # 两种 key 都 upsert，供不同调用方兼容
+                for k in ("last_prompt_version",
+                          "user_preference.last_prompt_version"):
+                    cur.execute(
+                        "SELECT key FROM user_config WHERE key=?", (k,)
+                    )
+                    if cur.fetchone() is None:
+                        conn.execute(
+                            "INSERT INTO user_config "
+                            "(key, value, updated_at) VALUES (?, ?, ?)",
+                            (k, str(new_id), ts_short),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE user_config SET value=?, updated_at=? "
+                            "WHERE key=?",
+                            (str(new_id), ts_short, k),
+                        )
+                conn.commit()
+                return new_id
+        except Exception as e:
+            logging.warning(
+                "[FitnessDB] create_system_prompt_version failed: %s", e)
+            return None
+
+    # ============================================================
+    # V4.9 编辑与模型视图支持
+    # ============================================================
+
+    # voice_sessions 可编辑字段白名单 (其他字段一律拒绝写)
+    _VOICE_EDITABLE = (
+        "transcript", "response", "summary", "duration_s", "trigger_src",
+    )
+
+    def update_voice_session_field(self, row_id, field, value):
+        """编辑 voice_sessions 单个字段。白名单校验 + 参数化查询。
+
+        返回 True 表示受影响行 >= 1，False 表示字段不在白名单或 id 不存在。
+        """
+        if field not in self._VOICE_EDITABLE:
+            logging.warning(
+                "[FitnessDB] update_voice_session_field: field %r not allowed",
+                field,
+            )
+            return False
+        try:
+            conn = self._ensure()
+            cur = conn.execute(
+                "UPDATE voice_sessions SET " + field + "=? WHERE id=?",
+                (value, int(row_id)),
+            )
+            conn.commit()
+            return cur.rowcount > 0
+        except Exception as e:
+            logging.warning(
+                "[FitnessDB] update_voice_session_field(%s) failed: %s",
+                field, e)
+            return False
+
+    def list_models(self, only_active=False):
+        """返回 model_registry 全表（或 active=1）。"""
+        try:
+            conn = self._ensure()
+            sql = ("SELECT id,name,exercise,path,arch,params_m,size_kb,"
+                   "train_acc,val_acc,epochs,dataset,trained_at,active,notes,"
+                   "is_demo_seed FROM model_registry")
+            if only_active:
+                sql += " WHERE active=1"
+            sql += " ORDER BY exercise, id"
+            rows = conn.execute(sql).fetchall()
+            cols = ("id", "name", "exercise", "path", "arch", "params_m",
+                    "size_kb", "train_acc", "val_acc", "epochs", "dataset",
+                    "trained_at", "active", "notes", "is_demo_seed")
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception as e:
+            logging.warning("[FitnessDB] list_models failed: %s", e)
+            return []
+
+    def get_feature_embeddings(self, exercise=None):
+        """返回 feature_embeddings 全部或某 exercise 的 2D 散点。"""
+        try:
+            conn = self._ensure()
+            if exercise:
+                rows = conn.execute(
+                    "SELECT exercise,label,x,y FROM feature_embeddings "
+                    "WHERE exercise=? ORDER BY id",
+                    (exercise,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT exercise,label,x,y FROM feature_embeddings "
+                    "ORDER BY exercise, id"
+                ).fetchall()
+            return [
+                {"exercise": r[0], "label": r[1], "x": r[2], "y": r[3]}
+                for r in rows
+            ]
+        except Exception as e:
+            logging.warning("[FitnessDB] get_feature_embeddings failed: %s", e)
+            return []
 
     def close(self):
         try:

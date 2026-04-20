@@ -1,0 +1,108 @@
+{
+  "exercise": "curl",
+  "deep_fusion": false,
+  "n_folds": 3,
+  "avg_train_f1": 0.4642733505931423,
+  "avg_val_f1": 0.45103641152220136,
+  "folds": [
+    {
+      "fold": 1,
+      "val_user": "user_01",
+      "n_train": 540,
+      "n_val": 270,
+      "train_f1": 0.38967863827676913,
+      "val_f1": 0.31468460291604305,
+      "confusion_matrix": [
+        [
+          39,
+          8,
+          43
+        ],
+        [
+          50,
+          7,
+          33
+        ],
+        [
+          40,
+          1,
+          49
+        ]
+      ]
+    },
+    {
+      "fold": 2,
+      "val_user": "user_02",
+      "n_train": 540,
+      "n_val": 270,
+      "train_f1": 0.5533799533799534,
+      "val_f1": 0.5851414297542505,
+      "confusion_matrix": [
+        [
+          90,
+          0,
+          0
+        ],
+        [
+          74,
+          16,
+          0
+        ],
+        [
+          27,
+          1,
+          62
+        ]
+      ]
+    },
+    {
+      "fold": 3,
+      "val_user": "user_03",
+      "n_train": 540,
+      "n_val": 270,
+      "train_f1": 0.4497614601227044,
+      "val_f1": 0.4532832018963105,
+      "confusion_matrix": [
+        [
+          89,
+          1,
+          0
+        ],
+        [
+          10,
+          49,
+          31
+        ],
+        [
+          70,
+          17,
+          3
+        ]
+      ]
+    }
+  ],
+  "confusion_matrix_total": [
+    [
+      218,
+      9,
+      43
+    ],
+    [
+      134,
+      72,
+      64
+    ],
+    [
+      137,
+      19,
+      114
+    ]
+  ],
+  "cos_sim_p5_threshold": 0.18699601292610168,
+  "label_names": [
+    "standard",
+    "compensation",
+    "bad_form"
+  ],
+  "best_fold_val_user": "user_02"
+}

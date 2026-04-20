@@ -4,11 +4,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TARGET="toybrick@10.105.245.224"
+TARGET="toybrick@10.18.76.224"
 BOARD_KEY="$HOME/.ssh/id_rsa_toybrick"
 CLOUD_KEY="$HOME/.ssh/id_cloud_autodl"
 CLOUD_SSH="root@connect.westd.seetacloud.com"
-CLOUD_PORT=14191
+CLOUD_PORT=42924  # V4.5 2026-04-18 新实例端口
 CLOUD_RTMPOSE_URL="${CLOUD_RTMPOSE_URL:-https://u953119-ba4a-9dcd6a47.westd.seetacloud.com:8443/infer}"
 
 # [1/3] Keys + cloud check
@@ -56,6 +56,6 @@ ssh -i "$BOARD_KEY" -o StrictHostKeyChecking=no $TARGET \
 echo ""
 echo "==========================================================="
 echo "  IronBuddy V3.0 online!"
-echo "  Web:   http://10.105.245.224:5000/"
+echo "  Web:   http://10.18.76.224:5000/"
 echo "  Vision: Cloud GPU direct HTTPS (~100ms, no tunnel)"
 echo "==========================================================="

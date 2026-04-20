@@ -1,0 +1,12 @@
+{
+  "peak_mvc": {
+    "ch0": 780.8,
+    "ch1": 443.1
+  },
+  "protocol": "SENIAM-2000",
+  "exercise": "curl",
+  "std_pct": 0.08,
+  "ts": 1776442139.2735333,
+  "source": "mock",
+  "user_id": "user_01"
+}

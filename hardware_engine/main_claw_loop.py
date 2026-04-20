@@ -859,6 +859,12 @@ async def main():
             except Exception as _e:
                 logging.warning("[DB] log_llm 失败: %s", _e)
             _ds_lock[0] = False
+            # V7.22: 解除禁麦门禁
+            try:
+                if os.path.exists("/dev/shm/llm_inflight"):
+                    os.remove("/dev/shm/llm_inflight")
+            except Exception:
+                pass
             logging.info("[_ds_wrapper] 已释放 _ds_lock")
 
     _chat_lock = [False]
@@ -1263,6 +1269,12 @@ async def main():
                 if _llm_ok:
                     # V7.11 正常路径: 上锁 + 异步 DeepSeek
                     _ds_lock[0] = True
+                    # V7.22 (2026-04-21): 禁麦门禁 — API 期间任何录音直接作废
+                    try:
+                        open("/dev/shm/llm_inflight", "w").close()
+                        os.system("killall -9 arecord 2>/dev/null")
+                    except Exception:
+                        pass
                     if fatigue_trigger:
                         _this_set_triggered[0] = True
                     _last_deepseek_time = time.time()

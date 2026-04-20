@@ -11,6 +11,10 @@
 | `docs/technical/decisions.md` | ⭐ **架构决策 + 踩坑（10大决策 + 9条踩坑，源码驱动）** |
 | `docs/technical/architecture.md` | 整体系统架构图 |
 | `streamer_app.py` | Flask 主 APP（~1040行，5 服务控制 + API + 视频流）|
+| `templates/database.html` | 一站式数据库可视化（`/database` 路由，8 张表）|
+| `docs/验收表/深蹲神经网络权威指南.md` | ⭐ **深蹲 GRU 三分类权威（V7.15，唯一标准，取代 MIA数据集分析.md）** |
+| `docs/验收表/语音模块权威指南.md` | ⭐ **语音模块权威（V7.14 杀青）** |
+| `docs/验收表/V3_7D_全链路地图.md` | 弯举 GRU 管线（由弯举 AI 独立维护） |
 | `hardware_engine/main_claw_loop.py` | 板端 FSM 主循环（深蹲/弯举 + GRU 推理）|
 | `hardware_engine/ai_sensory/cloud_rtmpose_client.py` | 视觉引擎（Cloud RTMPose + Local YOLOv5-Pose NPU 双模）|
 | `hardware_engine/ai_sensory/local_yolo_pose.py` | 本地 NPU 视觉推理（RKNN uint8）|

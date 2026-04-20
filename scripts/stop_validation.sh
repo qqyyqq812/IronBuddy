@@ -2,7 +2,7 @@
 # IronBuddy V3.0 one-click stop (Board + SSH tunnel)
 
 BOARD_KEY="$HOME/.ssh/id_rsa_toybrick"
-TARGET="toybrick@10.105.245.224"
+TARGET="toybrick@10.18.76.224"
 
 echo "[1/3] stopping board..."
 ssh -i "$BOARD_KEY" -o StrictHostKeyChecking=no -o ConnectTimeout=5 $TARGET 'bash -s' <<'STOP'

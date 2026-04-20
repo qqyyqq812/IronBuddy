@@ -156,7 +156,7 @@ CLOUD_HEALTH_URL = os.environ.get(
 )
 JPEG_QUALITY = int(os.environ.get("CLOUD_JPEG_QUALITY", "50"))
 REQUEST_TIMEOUT = float(os.environ.get("CLOUD_TIMEOUT_S", "5.0"))
-TARGET_FPS = int(os.environ.get("CLOUD_TARGET_FPS", "15"))
+TARGET_FPS = int(os.environ.get("CLOUD_TARGET_FPS", "25"))
 FRAME_INTERVAL = 1.0 / TARGET_FPS
 USE_NPU_FALLBACK = os.environ.get("CLOUD_FALLBACK_NPU", "1") != "0"
 # Async mode: camera runs at full speed, cloud inference in background thread
@@ -309,8 +309,31 @@ def _generate_emg_from_angle(angle, exercise="squat"):
                 "calves": max(0, 5+noise()), "biceps": max(0, 2+noise())}
 
 
+def _is_emg_sensor_live():
+    """V7.23: 心跳时戳判定 — 读 JSON {"ts", "connected"},
+    time.time() - ts < 1.0s 视为真实传感器在线, 否则回滚到模拟.
+    兼容旧格式 (空文件 / 纯数字) → 解析失败即视为过期.
+    """
+    try:
+        with open("/dev/shm/emg_heartbeat", "r") as _hbf:
+            _raw = _hbf.read().strip()
+        if not _raw:
+            return False
+        # 新格式 JSON
+        if _raw.startswith("{"):
+            _hb = json.loads(_raw)
+            _ts = float(_hb.get("ts", 0))
+            return (time.time() - _ts) < 1.0
+        # 兼容旧格式: 纯数字字符串
+        _ts = float(_raw)
+        return (time.time() - _ts) < 1.0
+    except Exception:
+        return False
+
+
 def _write_emg(kpts, exercise="squat"):
-    if os.path.exists("/dev/shm/emg_heartbeat"):
+    # V7.23: 由 existence 改为 freshness 判定 — 传感器断连 1s 后自动回滚到模拟
+    if _is_emg_sensor_live():
         return
     try:
         l = kpts[11][2] + kpts[13][2] + kpts[15][2]
@@ -526,6 +549,14 @@ def main():
     def _cloud_worker():
         """Background thread: picks up latest JPEG, sends to cloud, stores result."""
         cloud_session = _make_session()
+        # V4.8: cap connection pool so stuck cloud requests can't starve the main loop
+        try:
+            from requests.adapters import HTTPAdapter as _HA
+            _adapter = _HA(pool_connections=2, pool_maxsize=2, max_retries=0)
+            cloud_session.mount("http://", _adapter)
+            cloud_session.mount("https://", _adapter)
+        except Exception:
+            pass
         while _infer_alive[0]:
             with _infer_lock:
                 jpeg = _cloud_jpeg_slot[0]
@@ -607,6 +638,17 @@ def main():
                     continue
                 orig_h, orig_w = frame.shape[:2]
 
+            # V4.8: drain stale inference queues on explicit user-triggered vision switch
+            if os.path.exists("/dev/shm/vision_reset.flag"):
+                with _infer_lock:
+                    _cloud_jpeg_slot[0] = None
+                    _local_frame_slot[0] = None
+                    _latest_kpts[0] = None
+                try:
+                    os.remove("/dev/shm/vision_reset.flag")
+                except Exception:
+                    pass
+
             # ── Hot-switch vision mode (check every 30 frames) ────────────
             if frame_idx % 30 == 0:
                 new_mode = _read_vision_mode(active_mode)
@@ -614,11 +656,13 @@ def main():
                     print("[CloudClient] Vision mode switched: {} -> {}".format(active_mode, new_mode))
                     active_mode = new_mode
 
-            # ── Encode JPEG for upload ─────────────────────────────────────
-            ret_enc, buf = cv2.imencode(".jpg", frame, encode_param)
-            if not ret_enc:
-                continue
-            jpeg_bytes = buf.tobytes()
+            # ── Encode JPEG for upload (V7.13: local 模式跳过, 省 ~30ms/帧) ─
+            jpeg_bytes = None
+            if active_mode != "local":
+                ret_enc, buf = cv2.imencode(".jpg", frame, encode_param)
+                if not ret_enc:
+                    continue
+                jpeg_bytes = buf.tobytes()
 
             raw_kpts_list = None
             inference_src = "none"
@@ -675,18 +719,45 @@ def main():
             smoothed_kpts = smoothed_kpts_np.tolist()
 
             # ── Write pose_data.json ──────────────────────────────────────
-            # Use real person score from keypoint confidence (not hardcoded)
+            # V4.8: Mode-aware confidence threshold. Cloud RTMPose without a
+            # detection stage tends to hallucinate keypoints on empty frames
+            # (score ~0.1-0.2 even on background). Cloud thresholds raised +
+            # geometric sanity check (skeleton dimensions must be plausible).
             top_confs = sorted([k[2] for k in smoothed_kpts], reverse=True)
             person_score = float(np.mean(top_confs[:6])) if top_confs else 0
+
+            # Geometric plausibility: shoulder-hip distance > 40px AND
+            # keypoints not all clustered in <80px bbox (dead-zone noise).
+            valid_geom = False
+            try:
+                xs = [k[0] for k in smoothed_kpts if k[2] > 0.05]
+                ys = [k[1] for k in smoothed_kpts if k[2] > 0.05]
+                if len(xs) >= 5:
+                    bbox_w = max(xs) - min(xs)
+                    bbox_h = max(ys) - min(ys)
+                    # A real person in a 640x480 frame spans > 120px in at least one axis
+                    valid_geom = bbox_w > 80 and bbox_h > 120
+            except Exception:
+                valid_geom = True  # fall-open if math fails
+
+            # Thresholds: local NPU produces low raw scores (0.08+), cloud
+            # RTMPose without det stage needs much higher bar + geometry
+            conf_threshold = 0.25 if active_mode == "cloud" else 0.08
+            publish = person_score > conf_threshold and valid_geom
+
             out_json = {
                 "timestamp": t_now,
                 "frame_idx": frame_idx,
-                "objects": [{"score": round(person_score, 3), "kpts": smoothed_kpts}] if person_score > 0.08 else [],
+                "objects": [{"score": round(person_score, 3), "kpts": smoothed_kpts}] if publish else [],
             }
             _write_pose_json(out_json)
 
             # ── Write result.jpg for MJPEG streaming ──────────────────────
-            _write_result_jpg(frame, smoothed_kpts)
+            # V7.13: 节流 JPEG 编码 + HDMI imshow (~80ms CPU 大头) 到 12Hz,
+            # 让推理 + pose 写入跑满 TARGET_FPS. 可用环境变量 JPEG_STRIDE 覆盖.
+            _jpeg_stride = int(os.environ.get("JPEG_STRIDE", "3"))  # 25fps / 3 ≈ 8fps MJPEG (main 循环可跑 27Hz)
+            if frame_idx % max(1, _jpeg_stride) == 0:
+                _write_result_jpg(frame, smoothed_kpts)
 
             # ── Write simulated EMG (synced with skeleton angle) ──────────
             _exercise = "squat"

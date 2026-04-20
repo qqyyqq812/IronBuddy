@@ -7,12 +7,27 @@ import os
 import json
 import time
 import io
+import logging  # V7.21 (2026-04-21): 补 import —— 原代码未导入, feishu_smart_push 降级路径炸 NameError → 500
 import subprocess
+import threading
+import traceback
 import glob as glob_mod
+import requests
 from flask import Flask, Response, request, redirect
 
 template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'templates'))
 app = Flask(__name__, template_folder=template_dir)
+
+# V7.21: 全局异常兜底 —— 任何未捕获异常都返回 JSON, 绝不落到 Flask 原生 HTML 500
+@app.errorhandler(Exception)
+def _json_error_handler(e):
+    logging.error("[Unhandled] %s: %s\n%s", type(e).__name__, e, traceback.format_exc())
+    body = json.dumps({"ok": False, "error": type(e).__name__, "detail": str(e)[:300]}, ensure_ascii=False)
+    return Response(body, status=500, mimetype='application/json')
+
+# V7.21: 飞书推送互斥锁 —— 防止并发/重复点击把后端挤爆
+_FEISHU_PUSH_LOCK = threading.Lock()
+_FEISHU_PUSH_STARTED_AT = [0.0]
 
 # ===== JPEG 压缩配置 =====
 SNAPSHOT_QUALITY = 65       # JPEG 质量 (1-100)，65 约 35-40KB（保持文字清晰）
@@ -34,7 +49,6 @@ def index():
         return resp
     except Exception as e:
         return f"<h1>模板加载失败</h1><p>{e}</p>", 500
-
 
 @app.route('/manifest.json')
 def pwa_manifest():
@@ -132,15 +146,16 @@ def state_feed():
         pass
     if "muted" not in base:
         base["muted"] = False
-    # Merge current fatigue limit (UI-set, persisted to /dev/shm/ui_fatigue_limit.json)
-    try:
-        if os.path.exists("/dev/shm/ui_fatigue_limit.json"):
-            with open("/dev/shm/ui_fatigue_limit.json", "r") as f:
-                base["fatigue_limit"] = int(json.loads(f.read()).get("limit", 1500))
-        else:
+    # V7.6: fatigue_limit 来源优先级 FSM (最权威) > ui_fatigue_limit.json > 1500
+    if "fatigue_limit" not in base:
+        try:
+            if os.path.exists("/dev/shm/ui_fatigue_limit.json"):
+                with open("/dev/shm/ui_fatigue_limit.json", "r") as f:
+                    base["fatigue_limit"] = int(json.loads(f.read()).get("limit", 1500))
+            else:
+                base["fatigue_limit"] = 1500
+        except Exception:
             base["fatigue_limit"] = 1500
-    except Exception:
-        base["fatigue_limit"] = 1500
     return Response(json.dumps(base, ensure_ascii=False), mimetype='application/json')
 
 
@@ -211,11 +226,13 @@ def chat_reply():
 
 @app.route('/api/chat_input')
 def get_chat_input():
-    """读取用户语音识别内容"""
+    """读取用户语音识别内容 (V7.5: 去除 [voice-handled] 内部标记)"""
     try:
         if os.path.exists("/dev/shm/chat_input.txt"):
             with open("/dev/shm/chat_input.txt", "r", encoding="utf-8") as f:
                 content = f.read().strip()
+            # V7.5: 剥离 FSM 路由控制标记
+            content = content.replace("[voice-handled]", "").strip()
             mtime = os.path.getmtime("/dev/shm/chat_input.txt")
             return Response(json.dumps({"text": content, "ts": mtime}, ensure_ascii=False), mimetype='application/json')
     except Exception:
@@ -390,6 +407,295 @@ def api_mvc_calibration():
                         mimetype='application/json', status=500)
 
 
+@app.route('/api/mvc_calibrate', methods=['POST'])
+def api_mvc_calibrate():
+    """V4.7 动态 MVC 校准触发端点（与 /api/mvc_calibration 区分：本接口真正触发硬件采集）。
+    协议：前端 POST → 写 /dev/shm/mvc_calibrate.request → udp_emg_server 进入 3 秒峰值采集
+          → udp_emg_server 写 /dev/shm/mvc_calibrate.result → 本端点轮询返回。
+    返回 {ok, target, comp, duration_ms} 或 {ok:false, error:"timeout"}。
+    """
+    req_path = '/dev/shm/mvc_calibrate.request'
+    res_path = '/dev/shm/mvc_calibrate.result'
+    t0 = time.time()
+    try:
+        # 清理旧结果 + 提交请求
+        try:
+            os.remove(res_path)
+        except OSError:
+            pass
+        with open(req_path, 'w') as _rf:
+            _rf.write(str(t0))
+        # 轮询 5 秒等 udp_emg_server 完成 3 秒采集 + 写盘
+        for _ in range(25):
+            time.sleep(0.2)
+            if os.path.exists(res_path):
+                with open(res_path, 'r') as _f:
+                    payload = json.load(_f)
+                return Response(json.dumps({
+                    "ok": True,
+                    "target": payload.get("target"),
+                    "comp": payload.get("comp"),
+                    "duration_ms": int((time.time() - t0) * 1000),
+                }), mimetype='application/json')
+        return Response(json.dumps({"ok": False, "error": "timeout"}),
+                        mimetype='application/json', status=504)
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+# ========================================================================
+# V7.16 测试采集 (FSM-对齐 rep) — 3 端点, 协议同 mvc_calibrate (shm trigger)
+# ========================================================================
+_TEST_CAPTURE_SESSION_SHM = '/dev/shm/test_capture.session'
+_TEST_CAPTURE_STOP_SHM = '/dev/shm/test_capture.stop'
+_TEST_CAPTURE_RESULT_SHM = '/dev/shm/test_capture.result'
+_TEST_CAPTURE_ACK_SHM = '/dev/shm/test_capture.session.ack'
+_TEST_CAPTURE_EXERCISES = ('squat', 'bicep_curl')
+_TEST_CAPTURE_LABELS = ('standard', 'compensating', 'non_standard')
+
+def _test_capture_root():
+    # PROJECT_ROOT 定义在 L742, 本段代码位置更靠前, 所以懒加载
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        'data', 'test_capture')
+
+
+def _test_capture_safe_remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+@app.route('/api/test_capture/start', methods=['POST'])
+def api_test_capture_start():
+    """
+    V7.16 启动一次测试采集会话.
+    入参: {"exercise":"squat"|"bicep_curl", "label":"standard"|"compensating"|"non_standard"}
+    动作:
+      1) 调 FitnessDB.start_session(exercise) 拿 session_id (失败则用时间戳兜底)
+      2) mkdir -p data/test_capture/{exercise}/{label}/{YYYYMMDD_HHMMSS}_{sid}
+      3) 写 /dev/shm/test_capture.session
+      4) sleep 0.5s 检查 .session.ack, 未 ack 仅警告不阻断
+    出参: {"ok", "session_id", "out_dir", "ack"}
+    """
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        exercise = str(data.get("exercise", "")).strip()
+        label = str(data.get("label", "")).strip()
+        if exercise not in _TEST_CAPTURE_EXERCISES:
+            return Response(json.dumps({"ok": False, "error": "invalid exercise"}),
+                            mimetype='application/json', status=400)
+        if label not in _TEST_CAPTURE_LABELS:
+            return Response(json.dumps({"ok": False, "error": "invalid label"}),
+                            mimetype='application/json', status=400)
+
+        # 已有 active session? 拒绝重复启动
+        if os.path.exists(_TEST_CAPTURE_SESSION_SHM):
+            return Response(json.dumps({
+                "ok": False,
+                "error": "session already active, stop it first"
+            }), mimetype='application/json', status=409)
+
+        # DB session_id (失败时用 int(time.time()) 兜底)
+        sid = None
+        db = _get_db()
+        if db is not None:
+            try:
+                sid = db.start_session(exercise)
+            except Exception as e:
+                logging.warning("test_capture start_session 失败: %s", e)
+        if not isinstance(sid, int):
+            sid = int(time.time()) % 100000
+
+        # 组装目录
+        ts_str = time.strftime("%Y%m%d_%H%M%S")
+        out_dir = os.path.join(_test_capture_root(), exercise, label,
+                               "{}_{}".format(ts_str, sid))
+        # 冲突时追加 _b
+        if os.path.exists(out_dir):
+            out_dir = out_dir + "_b"
+        os.makedirs(out_dir, exist_ok=True)
+
+        # 清掉旧的 result / ack
+        _test_capture_safe_remove(_TEST_CAPTURE_RESULT_SHM)
+        _test_capture_safe_remove(_TEST_CAPTURE_ACK_SHM)
+
+        # 写 session 信号
+        payload = {
+            "enabled": True,
+            "session_id": sid,
+            "exercise": exercise,
+            "label": label,
+            "out_dir": out_dir,
+            "started_ts": time.time(),
+        }
+        tmp = _TEST_CAPTURE_SESSION_SHM + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        os.rename(tmp, _TEST_CAPTURE_SESSION_SHM)
+
+        # 等 0.5s 看模拟器是否 ack (确认存活)
+        ack = False
+        for _ in range(5):
+            time.sleep(0.1)
+            if os.path.exists(_TEST_CAPTURE_ACK_SHM):
+                ack = True
+                break
+
+        resp = {
+            "ok": True,
+            "session_id": sid,
+            "exercise": exercise,
+            "label": label,
+            "out_dir": out_dir,
+            "ack": ack,
+        }
+        if not ack:
+            resp["warning"] = "simulator did not ack within 0.5s — ensure simulate_emg_from_{mia,bicep}.py is running"
+        return Response(json.dumps(resp, ensure_ascii=False),
+                        mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/test_capture/stop', methods=['POST'])
+def api_test_capture_stop():
+    """
+    V7.16 停止采集并落盘.
+    动作:
+      1) 写 /dev/shm/test_capture.stop {"discard": false}
+      2) 轮询 /dev/shm/test_capture.result (最多 5s, 0.2s 一次)
+      3) 解析结果, 调 FitnessDB.end_session (best-effort)
+      4) 清 session/stop/ack 信号
+    出参: {"ok", "rep_count", "raw_rows", "duration_s", "out_dir"} 或 {"ok":false,"error":"timeout"}
+    """
+    try:
+        # 无活动 session 时直接返回
+        if not (os.path.exists(_TEST_CAPTURE_SESSION_SHM) or
+                os.path.exists(_TEST_CAPTURE_RESULT_SHM)):
+            return Response(json.dumps({"ok": False, "error": "no active capture session"}),
+                            mimetype='application/json', status=409)
+
+        # 写 stop 信号
+        with open(_TEST_CAPTURE_STOP_SHM + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"discard": False}, f)
+        os.rename(_TEST_CAPTURE_STOP_SHM + ".tmp", _TEST_CAPTURE_STOP_SHM)
+
+        # 轮询 result (5s 上限)
+        result = None
+        for _ in range(25):
+            time.sleep(0.2)
+            if os.path.exists(_TEST_CAPTURE_RESULT_SHM):
+                try:
+                    with open(_TEST_CAPTURE_RESULT_SHM, "r", encoding="utf-8") as f:
+                        result = json.load(f)
+                    break
+                except (IOError, ValueError):
+                    continue
+        if result is None:
+            # 超时但仍清理信号
+            _test_capture_safe_remove(_TEST_CAPTURE_STOP_SHM)
+            return Response(json.dumps({"ok": False, "error": "timeout waiting for simulator flush"}),
+                            mimetype='application/json', status=504)
+
+        # best-effort DB end_session
+        sid = result.get("session_id")
+        if isinstance(sid, int):
+            db = _get_db()
+            if db is not None:
+                try:
+                    reps = int(result.get("rep_count", 0))
+                    # 简化: good=rep_count, failed=0, peak_fatigue=0 (capture 模式不追踪)
+                    db.end_session(sid, good=reps, failed=0, fatigue_peak=0.0)
+                except Exception as e:
+                    logging.warning("test_capture end_session 失败: %s", e)
+
+        # 清理所有信号
+        _test_capture_safe_remove(_TEST_CAPTURE_RESULT_SHM)
+        _test_capture_safe_remove(_TEST_CAPTURE_STOP_SHM)
+        _test_capture_safe_remove(_TEST_CAPTURE_ACK_SHM)
+        _test_capture_safe_remove(_TEST_CAPTURE_SESSION_SHM)
+
+        return Response(json.dumps(result, ensure_ascii=False),
+                        mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/test_capture/clear', methods=['POST'])
+def api_test_capture_clear():
+    """
+    V7.16 清空当前缓冲不落盘.
+    动作: 写 /dev/shm/test_capture.stop {"discard": true}, 轮询 result.
+    出参: {"ok", "discarded": true}
+    """
+    try:
+        if not os.path.exists(_TEST_CAPTURE_SESSION_SHM):
+            return Response(json.dumps({"ok": False, "error": "no active capture session"}),
+                            mimetype='application/json', status=409)
+
+        with open(_TEST_CAPTURE_STOP_SHM + ".tmp", "w", encoding="utf-8") as f:
+            json.dump({"discard": True}, f)
+        os.rename(_TEST_CAPTURE_STOP_SHM + ".tmp", _TEST_CAPTURE_STOP_SHM)
+
+        result = None
+        for _ in range(15):
+            time.sleep(0.2)
+            if os.path.exists(_TEST_CAPTURE_RESULT_SHM):
+                try:
+                    with open(_TEST_CAPTURE_RESULT_SHM, "r", encoding="utf-8") as f:
+                        result = json.load(f)
+                    break
+                except (IOError, ValueError):
+                    continue
+
+        # 清所有信号
+        _test_capture_safe_remove(_TEST_CAPTURE_RESULT_SHM)
+        _test_capture_safe_remove(_TEST_CAPTURE_STOP_SHM)
+        _test_capture_safe_remove(_TEST_CAPTURE_ACK_SHM)
+        _test_capture_safe_remove(_TEST_CAPTURE_SESSION_SHM)
+
+        if result is None:
+            return Response(json.dumps({"ok": True, "discarded": True,
+                                        "note": "simulator did not respond; signals cleared"}),
+                            mimetype='application/json')
+        return Response(json.dumps(result, ensure_ascii=False),
+                        mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/test_capture/status')
+def api_test_capture_status():
+    """V7.16 查询当前采集状态 (前端轮询用)."""
+    active = os.path.exists(_TEST_CAPTURE_SESSION_SHM)
+    ack = os.path.exists(_TEST_CAPTURE_ACK_SHM)
+    payload = {"active": active, "ack": ack}
+    if active:
+        try:
+            with open(_TEST_CAPTURE_SESSION_SHM, "r", encoding="utf-8") as f:
+                sess = json.load(f)
+            payload["session_id"] = sess.get("session_id")
+            payload["exercise"] = sess.get("exercise")
+            payload["label"] = sess.get("label")
+            payload["started_ts"] = sess.get("started_ts")
+            # FSM 实时 rep 计数
+            try:
+                with open("/dev/shm/fsm_state.json", "r", encoding="utf-8") as ff:
+                    s = json.load(ff)
+                payload["fsm_reps"] = int(s.get("good", 0)) + int(s.get("failed", 0)) + int(s.get("comp", 0))
+            except (IOError, ValueError):
+                payload["fsm_reps"] = -1
+        except (IOError, ValueError):
+            pass
+    return Response(json.dumps(payload, ensure_ascii=False),
+                    mimetype='application/json')
+
+
 @app.route('/api/switch_vision', methods=['POST'])
 def api_switch_vision():
     """Write vision mode signal (cloud / local)."""
@@ -405,6 +711,12 @@ def api_switch_vision():
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(payload)
         os.rename(tmp_path, target_path)
+        # V4.8: drop signal so cloud_rtmpose_client drains its queue (prevents stuck request freeze)
+        try:
+            with open("/dev/shm/vision_reset.flag", "w") as _f:
+                _f.write("1")
+        except Exception:
+            pass
         return Response(json.dumps({"ok": True, "mode": mode}), mimetype='application/json')
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),
@@ -490,25 +802,107 @@ def hdmi_status():
                     mimetype='application/json')
 
 
-# ===== Feishu Plan Push API =====
+# ===== Feishu Smart Push API (Nexus Enabled) =====
 
-@app.route('/api/feishu/send_plan', methods=['POST'])
-def feishu_send_plan():
-    """Generate a fitness plan via DeepSeek and push to Feishu."""
+@app.route('/api/feishu/ping', methods=['GET'])
+def feishu_ping():
+    """V7.20 (2026-04-20): 纯飞书链路自检 —— 只测 token+msg, 不调 DeepSeek.
+    返回 {ok, token_ms, send_ms, total_ms, error?} 方便快速定位"是否真的是飞书失败"。
+    """
+    import urllib.request, urllib.error, ssl
     api_cfg = _load_api_config()
-    ds_key = api_cfg.get("deepseek_api_key", "")
-    feishu_app_id = api_cfg.get("feishu_app_id", "")
-    feishu_app_secret = api_cfg.get("feishu_app_secret", "")
-    feishu_chat_id = api_cfg.get("feishu_chat_id", "")
+    def _pick(*keys):
+        for k in keys:
+            v = api_cfg.get(k)
+            if v: return v
+        return ""
+    fid = _pick("FEISHU_APP_ID", "feishu_app_id")
+    fsec = _pick("FEISHU_APP_SECRET", "feishu_app_secret")
+    fcid = _pick("FEISHU_CHAT_ID", "feishu_chat_id")
+    if not (fid and fsec and fcid):
+        return Response(json.dumps({"ok": False, "error": "缺少 FEISHU_APP_ID/SECRET/CHAT_ID"}),
+                        mimetype='application/json', status=400)
+    ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+    t0 = time.time()
+    try:
+        tok_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+            data=json.dumps({"app_id": fid, "app_secret": fsec}).encode("utf-8"),
+            headers={"Content-Type": "application/json"})
+        tok_resp = json.loads(urllib.request.urlopen(tok_req, timeout=8, context=ctx).read())
+        t1 = time.time()
+        if tok_resp.get("code") != 0:
+            return Response(json.dumps({"ok": False, "stage": "token", "token_ms": int((t1-t0)*1000),
+                                        "error": tok_resp.get("msg", "unknown"), "code": tok_resp.get("code")}),
+                            mimetype='application/json', status=502)
+        tok = tok_resp.get("tenant_access_token", "")
+        msg_req = urllib.request.Request(
+            "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
+            data=json.dumps({"receive_id": fcid, "msg_type": "text",
+                             "content": json.dumps({"text": "🏓 IronBuddy feishu-ping " + time.strftime('%H:%M:%S')})}).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + tok})
+        msg_resp = json.loads(urllib.request.urlopen(msg_req, timeout=10, context=ctx).read())
+        t2 = time.time()
+        ok = (msg_resp.get("code") == 0)
+        return Response(json.dumps({"ok": ok, "token_ms": int((t1-t0)*1000), "send_ms": int((t2-t1)*1000),
+                                    "total_ms": int((t2-t0)*1000),
+                                    "error": None if ok else msg_resp.get("msg", "unknown"),
+                                    "code": msg_resp.get("code")}),
+                        mimetype='application/json', status=200 if ok else 502)
+    except urllib.error.HTTPError as e:
+        return Response(json.dumps({"ok": False, "error": "HTTPError %d" % e.code, "detail": str(e)}),
+                        mimetype='application/json', status=502)
+    except urllib.error.URLError as e:
+        return Response(json.dumps({"ok": False, "error": "URLError", "detail": str(e.reason)}),
+                        mimetype='application/json', status=504)
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": "exception", "detail": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/feishu/push', methods=['POST'])
+@app.route('/api/feishu/send_plan', methods=['POST'])
+def feishu_smart_push():
+    """Generate intelligent content via DeepSeek + SQLite Nexus and push to Feishu.
+    V7.21: 互斥锁 + max_tokens + 降级 + 精准错误（防止"服务器忙碌"假警报）"""
+    # V7.21: 并发互斥 —— 第二次点击立刻返回 429，不排队阻塞
+    if not _FEISHU_PUSH_LOCK.acquire(blocking=False):
+        _busy_for = int(time.time() - _FEISHU_PUSH_STARTED_AT[0])
+        return Response(json.dumps({"ok": False, "error": "上一次推送仍在进行", "busy_for_s": _busy_for}),
+                        mimetype='application/json', status=429)
+    _FEISHU_PUSH_STARTED_AT[0] = time.time()
+    try:
+        return _feishu_smart_push_impl()
+    finally:
+        _FEISHU_PUSH_LOCK.release()
+
+
+def _feishu_smart_push_impl():
+    api_cfg = _load_api_config()
+    # V4.8: case-insensitive config read (.api_config.json uses UPPERCASE,
+    # but some legacy callers write lowercase). Always try both.
+    def _pick(*keys):
+        for k in keys:
+            v = api_cfg.get(k)
+            if v:
+                return v
+        return ""
+    ds_key = _pick("DEEPSEEK_API_KEY", "deepseek_api_key")
+    feishu_app_id = _pick("FEISHU_APP_ID", "feishu_app_id")
+    feishu_app_secret = _pick("FEISHU_APP_SECRET", "feishu_app_secret")
+    feishu_chat_id = _pick("FEISHU_CHAT_ID", "feishu_chat_id")
+    feishu_webhook = _pick("FEISHU_WEBHOOK", "feishu_webhook")
 
     if not ds_key:
         return Response(json.dumps({"ok": False, "error": "DeepSeek API Key 未配置"}),
                         mimetype='application/json', status=400)
     if not feishu_app_id or not feishu_chat_id:
-        return Response(json.dumps({"ok": False, "error": "飞书凭证未配置"}),
-                        mimetype='application/json', status=400)
+        if not feishu_webhook:
+            return Response(json.dumps({"ok": False,
+                "error": "飞书凭证未配置 (需要 APP_ID+CHAT_ID 或 WEBHOOK)"}),
+                            mimetype='application/json', status=400)
 
-    # Read current training state
+    # Read current instantaneous training state
     fsm_data = {}
     try:
         if os.path.exists("/dev/shm/fsm_state.json"):
@@ -517,53 +911,92 @@ def feishu_send_plan():
     except Exception:
         pass
 
-    good = fsm_data.get("good", 0)
-    failed = fsm_data.get("failed", 0)
-    fatigue = fsm_data.get("fatigue", 0)
-    exercise = fsm_data.get("exercise", "squat")
-
-    # Custom prompt from request (optional)
+    # Extract dynamic properties from request
     req_data = request.get_json(silent=True) or {}
+    push_type = req_data.get("type", "plan")
     custom_prompt = req_data.get("prompt", "")
 
-    # Call DeepSeek to generate plan
+    # Engage Cognitive Nexus to build enriched prompts
+    try:
+        import sys
+        _he_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'hardware_engine')
+        if _he_path not in sys.path:
+            sys.path.append(_he_path)
+        from cognitive.cognitive_nexus import CognitiveNexus
+        nexus_proxy = CognitiveNexus()
+        prompts = nexus_proxy.build_prompt_for_type(push_type, fsm_data, custom_prompt)
+        sys_prompt = prompts["system"]
+        user_prompt = prompts["user"]
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": "Cognitive Nexus 挂载失败: " + str(e)}),
+                        mimetype='application/json', status=500)
+
+    # Call DeepSeek with historical context
     import urllib.request
     import ssl
-    try:
-        prompt = custom_prompt if custom_prompt else (
-            "你是IronBuddy智能健身教练。根据以下训练数据，生成今日健身规划：\n"
-            "- 当前运动: {}\n- 标准次数: {} 违规次数: {}\n- 疲劳值: {}/1500\n"
-            "请生成一份简洁的训练计划（包含热身、主训练、拉伸），控制在200字以内。"
-        ).format(exercise, good, failed, fatigue)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
 
-        ds_payload = json.dumps({
+    def _call_deepseek(sys_p, user_p, timeout_s):
+        _payload = json.dumps({
             "model": "deepseek-chat",
             "messages": [
-                {"role": "system", "content": "你是专业健身教练，输出简洁的训练计划。"},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": sys_p},
+                {"role": "user", "content": user_p}
             ],
-            "temperature": 0.7,
+            "temperature": 0.6,
+            "max_tokens": 400,   # V7.21: 硬限输出长度 —— 高峰期 DeepSeek 吐 2000+ token 能拖 25s+, 限 400 通常 5-10s 可返
         }).encode("utf-8")
-
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-
-        ds_req = urllib.request.Request(
+        _req = urllib.request.Request(
             "https://api.deepseek.com/chat/completions",
-            data=ds_payload,
+            data=_payload,
             headers={
                 "Content-Type": "application/json",
                 "Authorization": "Bearer " + ds_key,
             },
         )
-        ds_resp = json.loads(urllib.request.urlopen(ds_req, timeout=30, context=ctx).read())
-        plan_text = ds_resp["choices"][0]["message"]["content"]
-    except Exception as e:
-        return Response(json.dumps({"ok": False, "error": "DeepSeek 调用失败: " + str(e)}),
-                        mimetype='application/json', status=500)
+        _t0 = time.time()
+        _resp = json.loads(urllib.request.urlopen(_req, timeout=timeout_s, context=ctx).read())
+        _elapsed = time.time() - _t0
+        return _resp["choices"][0]["message"]["content"], _elapsed
 
-    # Push to Feishu
+    # V7.21 (2026-04-21): DeepSeek 失败不再 return 500 —— 改为降级纯数据模板, 仍推飞书
+    # 原链路: DeepSeek 挂 → 500 → voice_daemon 兜底"服务器忙碌" → 用户看不到任何飞书消息
+    # 新链路: DeepSeek 挂 → degraded=True + 模板文本 → 飞书仍推送 → 用户至少收到基础战报
+    bot_reply = ""
+    degraded = False
+    deepseek_elapsed = 0.0
+    deepseek_err = None
+    for _attempt in (1, 2):   # V7.21: 20s → 15s 两次, 总最坏 35s < voice_daemon 75s 超时
+        _tmo = 20 if _attempt == 1 else 15
+        try:
+            bot_reply, deepseek_elapsed = _call_deepseek(sys_prompt, user_prompt, _tmo)
+            logging.info("[feishu_push] DeepSeek 成功 尝试%d 耗时%.1fs 长度%d", _attempt, deepseek_elapsed, len(bot_reply))
+            break
+        except Exception as e:
+            deepseek_err = str(e)[:120]
+            logging.warning("[feishu_push] DeepSeek 失败 尝试%d: %s", _attempt, deepseek_err)
+
+    if not bot_reply:
+        # DeepSeek 连续两次失败 → 降级模板
+        degraded = True
+        _good = fsm_data.get("good", 0)
+        _failed = fsm_data.get("failed", 0)
+        _comp = fsm_data.get("comp", 0)
+        _fatigue = fsm_data.get("fatigue", 0)
+        _ex = "弯举" if fsm_data.get("exercise") == "bicep_curl" else "深蹲"
+        bot_reply = (
+            "⚠️ AI 点评暂不可用（%s）—— 以下为原始战报：\n\n"
+            "**动作**：%s\n"
+            "**标准**：%s 次\n"
+            "**不标准**：%s 次\n"
+            "**代偿**：%s 次\n"
+            "**疲劳池**：%.0f / 1500\n\n"
+            "_（DeepSeek 可能在限流或超时，飞书推送仍保障送达）_"
+        ) % (deepseek_err or "unknown", _ex, _good, _failed, _comp, float(_fatigue or 0))
+
+    # Push intelligent reply back to Feishu
     try:
         # Get token
         token_data = json.dumps({
@@ -575,18 +1008,25 @@ def feishu_send_plan():
             data=token_data,
             headers={"Content-Type": "application/json"},
         )
-        token_resp = json.loads(urllib.request.urlopen(token_req, timeout=10, context=ctx).read())
+        # V7.20: 飞书 token timeout 10→8s
+        token_resp = json.loads(urllib.request.urlopen(token_req, timeout=8, context=ctx).read())
         access_token = token_resp.get("tenant_access_token", "")
 
-        # Send message
+        # Format Final Feishu Message
         import datetime
-        feishu_text = "🏋️ IronBuddy 健身规划\n📅 {}\n\n{}".format(
-            datetime.datetime.now().strftime("%Y-%m-%d %H:%M"), plan_text)
+        type_banner = {
+            "plan": "🏋️ IronBuddy 训练规划与处方",
+            "summary": "🏆 IronBuddy 多日长效训练战报",
+            "reminder": "🚨 IronBuddy 身体警钟与状态通报"
+        }.get(push_type, "🤖 IronBuddy 助理播报")
+
+        feishu_text = f"{type_banner}\n📅 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{bot_reply}"
         msg_data = json.dumps({
             "receive_id": feishu_chat_id,
             "msg_type": "text",
             "content": json.dumps({"text": feishu_text}),
         }).encode("utf-8")
+
         msg_req = urllib.request.Request(
             "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id",
             data=msg_data,
@@ -597,12 +1037,21 @@ def feishu_send_plan():
         )
         msg_resp = json.loads(urllib.request.urlopen(msg_req, timeout=15, context=ctx).read())
         if msg_resp.get("code") == 0:
-            return Response(json.dumps({"ok": True, "plan": plan_text}), mimetype='application/json')
+            # V7.21: 回传 degraded + elapsed_s, 供 voice_daemon 和前端区分提示语
+            logging.info("[feishu_push] ✅ 飞书送达 degraded=%s ds_elapsed=%.1fs", degraded, deepseek_elapsed)
+            return Response(json.dumps({
+                "ok": True,
+                "type_triggered": push_type,
+                "plan": bot_reply,
+                "degraded": degraded,
+                "elapsed_s": round(deepseek_elapsed, 2),
+                "ds_error": deepseek_err if degraded else None,
+            }), mimetype='application/json')
         else:
             return Response(json.dumps({"ok": False, "error": "飞书发送失败", "detail": str(msg_resp)}),
-                            mimetype='application/json', status=500)
+                            mimetype='application/json', status=502)
     except Exception as e:
-        return Response(json.dumps({"ok": False, "error": "飞书推送失败: " + str(e), "plan": plan_text}),
+        return Response(json.dumps({"ok": False, "error": "飞书推送链路中断: " + str(e), "plan": bot_reply}),
                         mimetype='application/json', status=500)
 
 
@@ -671,10 +1120,10 @@ def training_log():
 # ===== V3.1: Admin Management Panel =====
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-BOARD_TARGET = "toybrick@10.105.245.224"
+BOARD_TARGET = "toybrick@10.18.76.224"
 BOARD_KEY_PATH = os.path.expanduser("~/.ssh/id_rsa_toybrick")
 CLOUD_SSH = "root@connect.westd.seetacloud.com"
-CLOUD_PORT = 14191
+CLOUD_PORT = 42924  # V4.5 2026-04-18 新实例端口
 CLOUD_KEY_PATH = os.path.expanduser("~/.ssh/id_cloud_autodl")
 
 # Service process signatures for pgrep
@@ -736,7 +1185,7 @@ def admin_overview():
 
     result = {
         "board_online": board_ok,
-        "board_ip": "10.105.245.224",
+        "board_ip": "10.18.76.224",
         "csv_count": csv_count,
         "model_exists": model_exists,
         "model_size_kb": round(model_size / 1024, 1) if model_exists else 0,
@@ -799,6 +1248,28 @@ def admin_start():
     """Start individual or all services directly on the board."""
     data = request.get_json(silent=True) or {}
     target = data.get("service", "all")  # "all" or specific service name
+
+    # V7.17: 全量启动时的初始化清理 —— 保证每次"一键启动"都是干净基线
+    if target == "all":
+        # 1) 推理模式强制回到 pure_vision (上次若切到 vision_sensor, 文件不擦会被继承)
+        try:
+            _ts = str(int(time.time()))
+            _tmp_im = "/dev/shm/inference_mode.json.tmp"
+            with open(_tmp_im, "w", encoding="utf-8") as _imf:
+                _imf.write('{"mode":"pure_vision","ts":' + _ts + '}')
+            os.rename(_tmp_im, "/dev/shm/inference_mode.json")
+        except Exception:
+            pass
+        # 2) 清理语音守护的残留信号文件 —— chat_active / voice_interrupt / mute_signal
+        #    若上次会话在长对话中被杀, chat_active 会残留导致新启动的唤醒词被吞
+        for _stale in ("/dev/shm/chat_active",
+                       "/dev/shm/voice_interrupt",
+                       "/dev/shm/mute_signal.json"):
+            try:
+                if os.path.exists(_stale):
+                    os.remove(_stale)
+            except Exception:
+                pass
 
     results = {}
     services_to_start = _SERVICE_LAUNCHERS if target == "all" else {target: _SERVICE_LAUNCHERS.get(target)}
@@ -994,7 +1465,7 @@ def admin_training_data():
 def admin_system_info():
     """System status: GPU, board, connectivity"""
     info = {
-        "board": {"online": False, "ip": "10.105.245.224"},
+        "board": {"online": False, "ip": "10.18.76.224"},
         "cloud_gpu": {"online": False, "info": ""},
         "openclaw": {"status": "unknown"},
     }
@@ -1048,25 +1519,445 @@ def _save_api_config(cfg):
     os.rename(tmp, API_CONFIG_PATH)
 
 
+# Keys that get masked in GET responses (sensitive).
+_API_CONFIG_SENSITIVE_KEYS = (
+    'DEEPSEEK_API_KEY', 'deepseek_api_key', 'BAIDU_API_KEY', 'BAIDU_SECRET_KEY',
+    'FEISHU_APP_SECRET', 'FEISHU_WEBHOOK', 'CLOUD_SSH_PASSWORD',
+)
+
+# Keys accepted from POST requests (SSH credentials intentionally excluded).
+_API_CONFIG_WRITE_WHITELIST = (
+    'deepseek_api_key', 'llm_backend',
+    'BAIDU_APP_ID', 'BAIDU_API_KEY', 'BAIDU_SECRET_KEY',
+    'FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_CHAT_ID', 'FEISHU_WEBHOOK',
+    'CLOUD_RTMPOSE_URL',
+)
+
+
+def _mask_secret(val):
+    if not isinstance(val, str) or not val:
+        return val
+    if len(val) > 10:
+        return val[:6] + '****' + val[-4:]
+    return '****'
+
+
 @app.route('/api/admin/api_config', methods=['GET', 'POST'])
 def admin_api_config():
     if request.method == 'GET':
         cfg = _load_api_config()
-        # Mask the key for display (show first 6 chars)
-        masked = cfg.copy()
-        key = masked.get('deepseek_api_key', '')
-        if key and len(key) > 6:
-            masked['deepseek_api_key'] = key[:6] + '****' + key[-4:]
+        masked = {}
+        for k, v in cfg.items():
+            if k in _API_CONFIG_SENSITIVE_KEYS:
+                masked[k] = _mask_secret(v)
+            else:
+                masked[k] = v
         return Response(json.dumps(masked), mimetype='application/json')
     else:
         data = request.get_json(silent=True) or {}
         cfg = _load_api_config()
-        if 'deepseek_api_key' in data:
-            cfg['deepseek_api_key'] = data['deepseek_api_key']
-        if 'llm_backend' in data:
-            cfg['llm_backend'] = data['llm_backend']
+        for key in _API_CONFIG_WRITE_WHITELIST:
+            if key not in data:
+                continue
+            val = data[key]
+            # Skip masked placeholders — caller didn't actually re-enter the secret.
+            if isinstance(val, str) and '****' in val:
+                continue
+            cfg[key] = val
         _save_api_config(cfg)
         return Response(json.dumps({"ok": True}), mimetype='application/json')
+
+
+@app.route('/api/admin/cloud_verify', methods=['GET'])
+def admin_cloud_verify():
+    """Probe CLOUD_RTMPOSE_URL's /health endpoint; report latency + status."""
+    cfg = _load_api_config()
+    url = cfg.get('CLOUD_RTMPOSE_URL', '')
+    if not url:
+        return Response(json.dumps({"ok": False, "error": "CLOUD_RTMPOSE_URL 未配置"}), mimetype='application/json')
+    try:
+        health_url = url.rsplit('/', 1)[0] + '/health'
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": "URL 解析失败: " + str(e)}), mimetype='application/json')
+    t0 = time.time()
+    try:
+        resp = requests.get(health_url, timeout=3)
+        t1 = time.time()
+        status = None
+        try:
+            status = resp.json().get('status')
+        except Exception:
+            status = str(resp.status_code)
+        return Response(json.dumps({
+            "ok": True,
+            "status": status,
+            "latency_ms": int((t1 - t0) * 1000),
+        }), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}), mimetype='application/json')
+
+
+@app.route('/api/admin/reload_service', methods=['POST'])
+def admin_reload_service():
+    """V4.8: Restart a service so it picks up freshly-saved .api_config.json values.
+    Accepts body {"service": "voice" | "tunnel"}. Safe on WSL dev host (no-op)."""
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        svc = data.get("service", "voice")
+        root = "/home/toybrick/streamer_v3"
+        if not os.path.isdir(root):
+            return Response(json.dumps({"ok": False, "error": "not on board"}),
+                            mimetype='application/json')
+        import subprocess as _sp
+        if svc == "voice":
+            _sp.run(["pkill", "-f", "[v]oice_daemon"], timeout=5)
+            time.sleep(1)
+            # Relaunch via wrapper that re-reads .api_config.json
+            _sp.Popen(
+                ["setsid", "nohup", "bash", root + "/scripts/start_voice_with_env.sh"],
+                stdout=open("/tmp/voice.log", "a"),
+                stderr=_sp.STDOUT,
+                stdin=_sp.DEVNULL,
+                start_new_session=True,
+            )
+            return Response(json.dumps({"ok": True, "service": "voice",
+                                        "msg": "voice_daemon 已重启，新凭证已加载"}),
+                            mimetype='application/json')
+        if svc == "tunnel":
+            _sp.run(["pkill", "-f", "[s]sh.*-L.*6006:127.0.0.1:6006"], timeout=5)
+            _sp.run(["pkill", "-f", "[c]loud_tunnel.py"], timeout=5)
+            time.sleep(1)
+            out = _sp.run(
+                ["bash", root + "/scripts/cloud_tunnel.sh"],
+                capture_output=True, timeout=20,
+            )
+            return Response(json.dumps({
+                "ok": out.returncode == 0,
+                "service": "tunnel",
+                "msg": out.stdout.decode(errors='replace')[-200:]
+                if out.stdout else out.stderr.decode(errors='replace')[-200:],
+            }), mimetype='application/json')
+        return Response(json.dumps({"ok": False, "error": "unknown service: " + svc}),
+                        mimetype='application/json', status=400)
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+# ============================================================================
+# 视觉特征探测 (Phase 0 · env-gated, 可一键回退)
+# 启用：环境变量 IRONBUDDY_PROBE_ENABLED=1 启动 streamer 即激活 UI+接口
+# 关闭：unset 环境变量重启 streamer，所有探测 UI 隐藏、接口返回 403
+# 依赖：tools/vision_feature_probe_v2.py
+# ============================================================================
+_PROBE_ENABLED = os.environ.get('IRONBUDDY_PROBE_ENABLED', '0') == '1'
+_PROBE_SCRIPT = os.path.join(PROJECT_ROOT, 'tools', 'vision_feature_probe_v2.py')
+_PROBE_PID_FILE = '/dev/shm/probe_v2.pid'
+_PROBE_FEATURES_JSONL = '/dev/shm/rep_features.jsonl'
+_PROBE_LOG = '/tmp/probe_v2.log'
+
+
+def _probe_is_running():
+    """Check if probe_v2.py is alive by PID file + proc existence."""
+    try:
+        if not os.path.exists(_PROBE_PID_FILE):
+            return False, None
+        with open(_PROBE_PID_FILE, 'r') as f:
+            pid = f.read().strip()
+        if not pid or not pid.isdigit():
+            return False, None
+        if os.path.exists('/proc/{}'.format(pid)):
+            return True, int(pid)
+        # 陈旧 PID 文件，清掉
+        try:
+            os.remove(_PROBE_PID_FILE)
+        except OSError:
+            pass
+        return False, None
+    except Exception:
+        return False, None
+
+
+@app.route('/api/probe/enabled')
+def probe_enabled():
+    """UI 启动时查询, 只有启用时前端才会显示探测面板."""
+    return Response(json.dumps({"enabled": _PROBE_ENABLED}), mimetype='application/json')
+
+
+@app.route('/api/probe/start', methods=['POST'])
+def probe_start():
+    if not _PROBE_ENABLED:
+        return Response(json.dumps({"ok": False, "error": "probe disabled"}),
+                        mimetype='application/json', status=403)
+    running, pid = _probe_is_running()
+    if running:
+        return Response(json.dumps({"ok": True, "status": "already running", "pid": pid}),
+                        mimetype='application/json')
+    if not os.path.exists(_PROBE_SCRIPT):
+        return Response(json.dumps({"ok": False, "error": "script not found: " + _PROBE_SCRIPT}),
+                        mimetype='application/json', status=500)
+    try:
+        import subprocess as _sp
+        # nohup + setsid 保活，不占 streamer 子进程表
+        _sp.Popen(
+            ['nohup', 'python3', '-u', _PROBE_SCRIPT],
+            stdout=open(_PROBE_LOG, 'a'),
+            stderr=_sp.STDOUT,
+            stdin=_sp.DEVNULL,
+            start_new_session=True,
+        )
+        time.sleep(0.5)
+        running, pid = _probe_is_running()
+        return Response(json.dumps({"ok": bool(running), "pid": pid}),
+                        mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/probe/stop', methods=['POST'])
+def probe_stop():
+    if not _PROBE_ENABLED:
+        return Response(json.dumps({"ok": False, "error": "probe disabled"}),
+                        mimetype='application/json', status=403)
+    _run_cmd("pkill -f 'vision_feature_probe_v2.py' 2>/dev/null", timeout=3)
+    try:
+        if os.path.exists(_PROBE_PID_FILE):
+            os.remove(_PROBE_PID_FILE)
+    except OSError:
+        pass
+    return Response(json.dumps({"ok": True}), mimetype='application/json')
+
+
+@app.route('/api/probe/state')
+def probe_state():
+    """返回 {running, pid, current_label, features: [...]}"""
+    if not _PROBE_ENABLED:
+        return Response(json.dumps({"enabled": False, "running": False, "features": []}),
+                        mimetype='application/json')
+    running, pid = _probe_is_running()
+    feats = []
+    try:
+        if os.path.exists(_PROBE_FEATURES_JSONL):
+            with open(_PROBE_FEATURES_JSONL, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        feats.append(json.loads(line))
+                    except ValueError:
+                        continue
+            feats = feats[-100:]  # 6 类录制需要更大窗口
+    except (IOError, OSError):
+        pass
+    # 当前标签
+    cur_label = "unlabeled"
+    try:
+        if os.path.exists('/dev/shm/probe_label.txt'):
+            with open('/dev/shm/probe_label.txt', 'r') as f:
+                cur_label = f.read().strip() or "unlabeled"
+    except (IOError, OSError):
+        pass
+    return Response(json.dumps({
+        "enabled": True,
+        "running": bool(running),
+        "pid": pid,
+        "current_label": cur_label,
+        "features": feats,
+    }), mimetype='application/json')
+
+
+_PROBE_ALLOWED_LABELS = {
+    "squat_standard", "squat_compensating", "squat_non_standard",
+    "curl_standard", "curl_compensating", "curl_non_standard",
+    "unlabeled",
+}
+
+
+@app.route('/api/probe/set_label', methods=['POST'])
+def probe_set_label():
+    """UI 6 按钮调此接口切换当前标注. 写 /dev/shm/probe_label.txt (probe_v2 每 rep 结算时读)."""
+    if not _PROBE_ENABLED:
+        return Response(json.dumps({"ok": False, "error": "probe disabled"}),
+                        mimetype='application/json', status=403)
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        label = (data.get('label') or 'unlabeled').strip()
+        if label not in _PROBE_ALLOWED_LABELS:
+            return Response(json.dumps({"ok": False, "error": "invalid label: " + label}),
+                            mimetype='application/json', status=400)
+        tmp = '/dev/shm/probe_label.txt.tmp'
+        with open(tmp, 'w') as f:
+            f.write(label)
+        os.rename(tmp, '/dev/shm/probe_label.txt')
+        return Response(json.dumps({"ok": True, "label": label}),
+                        mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/probe/clear', methods=['POST'])
+def probe_clear():
+    """清空 rep_features.jsonl, 重新开始采集."""
+    if not _PROBE_ENABLED:
+        return Response(json.dumps({"ok": False, "error": "probe disabled"}),
+                        mimetype='application/json', status=403)
+    try:
+        if os.path.exists(_PROBE_FEATURES_JSONL):
+            os.remove(_PROBE_FEATURES_JSONL)
+        return Response(json.dumps({"ok": True}), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/admin/fatigue_reset', methods=['POST'])
+def admin_fatigue_reset():
+    """V4.8: Drop signal file that FSM watches to zero out fatigue counter.
+    Fires either from voice '清空疲劳' or auto-trigger when UI sees fatigue >= limit."""
+    try:
+        with open("/dev/shm/fatigue_reset.request.tmp", "w") as f:
+            f.write(str(time.time()))
+        os.rename("/dev/shm/fatigue_reset.request.tmp", "/dev/shm/fatigue_reset.request")
+        return Response(json.dumps({"ok": True}), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/admin/voice_diag', methods=['GET'])
+def admin_voice_diag():
+    """V4.8: Diagnose why voice is silent. Returns full status tree:
+      - baidu_configured: are all 3 BAIDU keys non-empty in .api_config.json?
+      - voice_running: is voice_daemon process alive?
+      - last_log_line: last error/info line from /tmp/voice.log
+      - tts_volume: current vol level
+      - alsa_mixer: current Playback Path value"""
+    result = {}
+    # 1. Check baidu keys
+    try:
+        cfg = _load_api_config()
+        def _pick(*ks):
+            for k in ks:
+                v = cfg.get(k)
+                if v:
+                    return True
+            return False
+        result["baidu_configured"] = (
+            _pick("BAIDU_APP_ID", "baidu_app_id") and
+            _pick("BAIDU_API_KEY", "baidu_api_key") and
+            _pick("BAIDU_SECRET_KEY", "baidu_secret_key")
+        )
+        result["baidu_app_id_head"] = (cfg.get("BAIDU_APP_ID") or cfg.get("baidu_app_id") or "")[:6]
+    except Exception as e:
+        result["baidu_configured"] = False
+        result["baidu_err"] = str(e)
+
+    # 2. Check voice_daemon process
+    try:
+        import subprocess as _sp
+        out = _sp.run(["pgrep", "-f", "[v]oice_daemon.py"],
+                      capture_output=True, timeout=3)
+        result["voice_running"] = out.returncode == 0
+        result["voice_pids"] = out.stdout.decode().strip().split()
+    except Exception as e:
+        result["voice_running"] = False
+        result["voice_err"] = str(e)
+
+    # 3. Last 5 log lines
+    try:
+        for log_path in ["/tmp/voice.log", "/tmp/voice_daemon.log"]:
+            if os.path.exists(log_path):
+                with open(log_path, "r") as f:
+                    lines = f.readlines()[-5:]
+                result["voice_log_tail"] = [l.rstrip() for l in lines]
+                break
+    except Exception:
+        pass
+
+    # 4. TTS volume
+    try:
+        if os.path.exists("/dev/shm/tts_volume.json"):
+            with open("/dev/shm/tts_volume.json", "r") as f:
+                result["tts_volume"] = json.load(f).get("vol", 7)
+        else:
+            result["tts_volume"] = 7
+    except Exception:
+        result["tts_volume"] = 7
+
+    # 5. ALSA mixer state (Playback Path)
+    try:
+        import subprocess as _sp
+        out = _sp.run(
+            ["amixer", "-c", "0", "cget",
+             "numid=1,iface=MIXER,name=Playback Path"],
+            capture_output=True, timeout=3)
+        result["alsa_playback_path"] = out.stdout.decode()[-120:] if out.stdout else ""
+    except Exception:
+        pass
+
+    return Response(json.dumps(result, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/admin/voice_test', methods=['POST'])
+def admin_voice_test():
+    """V4.8: Trigger a test TTS playback. Writes to /dev/shm/chat_reply.txt
+    so the existing speak() listener in voice_daemon picks it up.
+    If Baidu not configured, falls back to `aplay` of a tone."""
+    try:
+        data = request.get_json(silent=True) or {}
+        msg = data.get("msg", "你好，我是 IronBuddy 教练，语音系统工作正常")
+
+        # Path A: if voice_daemon is running, poke its chat_reply.txt watcher
+        # (it auto-speaks any new content in that file)
+        with open("/dev/shm/chat_reply.txt.tmp", "w", encoding="utf-8") as f:
+            f.write(msg)
+        os.rename("/dev/shm/chat_reply.txt.tmp", "/dev/shm/chat_reply.txt")
+
+        # Path B: ALSA sanity - play a 440Hz beep via speaker-test or sox if available
+        # This verifies the hardware output path even without Baidu
+        import subprocess as _sp
+        beep_ok = False
+        for cmd in [
+            ["speaker-test", "-c", "2", "-t", "sine", "-f", "440", "-l", "1"],
+            ["sh", "-c", "timeout 1 aplay /usr/share/sounds/alsa/Front_Center.wav"],
+        ]:
+            try:
+                r = _sp.run(cmd, capture_output=True, timeout=4)
+                if r.returncode == 0:
+                    beep_ok = True
+                    break
+            except Exception:
+                continue
+
+        return Response(json.dumps({
+            "ok": True,
+            "message_queued": msg,
+            "note": "若听见内容就是 TTS 通路 OK；若只听到静音请检查百度凭证+板端喇叭",
+            "beep_fallback": beep_ok,
+        }, ensure_ascii=False), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
+@app.route('/api/fsm_state')
+def api_fsm_state():
+    """V4.8: Passthrough read of /dev/shm/fsm_state.json for UI polling.
+    UI previously had no direct way to read angle/classification/emg."""
+    try:
+        path = "/dev/shm/fsm_state.json"
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                return Response(f.read(), mimetype='application/json')
+    except Exception:
+        pass
+    return Response(json.dumps({"state": "IDLE", "good": 0, "failed": 0,
+                                "angle": 0, "fatigue": 0, "exercise": "squat",
+                                "classification": "standard"}),
+                    mimetype='application/json')
 
 
 @app.route('/api/admin/logs')
@@ -1142,7 +2033,7 @@ def admin_project_info():
 
     # Config
     info["config"] = {
-        "board_ip": "10.105.245.224",
+        "board_ip": "10.18.76.224",
         "cloud_url": "https://u953119-ba4a-9dcd6a47.westd.seetacloud.com:8443/infer",
         "flask_port": 5000,
         "emg_port": 8080,
@@ -1189,6 +2080,797 @@ def api_history_stats():
     db = _get_db()
     data = db.get_range_stats(days=7) if db is not None else []
     return Response(json.dumps(data, ensure_ascii=False), mimetype='application/json')
+
+
+# ===== 数据库可视化（Sprint 6, 一站式 DB Viewer）=====
+_DB_VIEW_WHITELIST = {
+    'training_sessions': {
+        'order_by': 'started_at DESC',
+        'exercise_col': 'exercise',
+        'seed_col': 'is_demo_seed',
+    },
+    'rep_events': {
+        'order_by': 'ts DESC',
+        'exercise_col': 'exercise',
+        'seed_col': 'is_demo_seed',
+    },
+    'voice_sessions': {
+        'order_by': 'ts DESC',
+        'exercise_col': None,
+        'seed_col': 'is_demo_seed',
+    },
+    'preference_history': {
+        'order_by': 'ts DESC',
+        'exercise_col': None,
+        'seed_col': 'is_demo_seed',
+    },
+    'system_prompt_versions': {
+        'order_by': 'id DESC',
+        'exercise_col': None,
+        'seed_col': 'is_demo_seed',
+    },
+    'daily_summary': {
+        'order_by': 'date DESC',
+        'exercise_col': None,
+        'seed_col': 'is_demo_seed',
+    },
+    'llm_log': {
+        'order_by': 'ts DESC',
+        'exercise_col': None,
+        'seed_col': 'is_demo_seed',
+    },
+    'user_config': {
+        'order_by': 'key ASC',
+        'exercise_col': None,
+        'seed_col': None,
+    },
+    'model_registry': {
+        'order_by': 'exercise ASC, id ASC',
+        'exercise_col': 'exercise',
+        'seed_col': 'is_demo_seed',
+    },
+}
+
+
+def _db_view_path():
+    """Resolve local sqlite path for the DB viewer (dev machine)."""
+    candidate = os.path.join(PROJECT_ROOT, 'data', 'ironbuddy.db')
+    return candidate
+
+
+@app.route('/database')
+def database_page():
+    """一站式数据库可视化页面。"""
+    try:
+        html_path = os.path.join(template_dir, 'database.html')
+        with open(html_path, 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        resp = Response(html_content, mimetype='text/html')
+        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        return resp
+    except Exception as e:
+        return '<h1>数据库页面加载失败</h1><p>%s</p>' % e, 500
+
+
+@app.route('/api/db/tables')
+def api_db_tables():
+    """列出白名单表 + 每张表行数（区分种子/真实）。
+
+    V5.1: 增加 exists 字段让前端能看出表不存在（之前只把 total 归 0 容易被
+    误会成"表空"）。
+    """
+    import sqlite3 as _sq
+    db_path = _db_view_path()
+    db_exists = os.path.exists(db_path)
+    db_size_kb = round(os.path.getsize(db_path) / 1024.0, 1) \
+        if db_exists else 0
+    result = []
+    try:
+        conn = _sq.connect(db_path)
+        # 先扫一次 sqlite_master 拿到所有存在的表名
+        existing = set(
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        )
+        for name, meta in _DB_VIEW_WHITELIST.items():
+            exists = name in existing
+            if not exists:
+                result.append({
+                    'name': name, 'total': 0, 'seed': 0, 'live': 0,
+                    'exists': False,
+                    'error': 'table not in schema (migration 未推送)',
+                })
+                continue
+            try:
+                total = conn.execute(
+                    'SELECT COUNT(*) FROM ' + name
+                ).fetchone()[0]
+                seed = 0
+                live = total
+                if meta['seed_col']:
+                    try:
+                        seed = conn.execute(
+                            'SELECT COUNT(*) FROM ' + name + ' WHERE ' +
+                            meta['seed_col'] + '=1'
+                        ).fetchone()[0]
+                        live = total - seed
+                    except Exception:
+                        # seed_col 不存在（旧 schema 没这列），不算错
+                        pass
+                result.append({
+                    'name': name,
+                    'total': total,
+                    'seed': seed,
+                    'live': live,
+                    'exists': True,
+                })
+            except Exception as e:
+                result.append({
+                    'name': name, 'total': 0, 'seed': 0, 'live': 0,
+                    'exists': exists,
+                    'error': str(e),
+                })
+        conn.close()
+    except Exception as e:
+        return Response(
+            json.dumps({
+                'error': str(e),
+                'db_path': db_path,
+                'db_exists': db_exists,
+            }), status=500,
+            mimetype='application/json'
+        )
+    return Response(
+        json.dumps({
+            'tables': result,
+            'db_path': db_path,
+            'db_exists': db_exists,
+            'db_size_kb': db_size_kb,
+        }, ensure_ascii=False),
+        mimetype='application/json'
+    )
+
+
+@app.route('/api/db/diag')
+def api_db_diag():
+    """V5.1 · 深度诊断：DB 路径 / 大小 / WAL 状态 / schema 校验 / 迁移建议。
+
+    前端 🩺 维护按钮点开后一次性展示所有关键信息，让用户自己就能看出是
+    哪张表缺、哪个 migration 没跑。
+    """
+    import sqlite3 as _sq
+    out = {
+        'db_path': _db_view_path(),
+        'db_exists': False,
+        'db_size_kb': 0,
+        'journal_mode': None,
+        'sqlite_version': None,
+        'tables_existing': [],
+        'tables_missing': [],
+        'rows': {},
+        'cwd': os.getcwd(),
+        'project_root': PROJECT_ROOT,
+        'migrations_found': [],
+        'recommendations': [],
+    }
+    try:
+        if os.path.exists(out['db_path']):
+            out['db_exists'] = True
+            out['db_size_kb'] = round(
+                os.path.getsize(out['db_path']) / 1024.0, 1
+            )
+            conn = _sq.connect(out['db_path'])
+            out['journal_mode'] = conn.execute(
+                "PRAGMA journal_mode"
+            ).fetchone()[0]
+            out['sqlite_version'] = conn.execute(
+                "SELECT sqlite_version()"
+            ).fetchone()[0]
+            existing = set(
+                r[0] for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            )
+            for name in _DB_VIEW_WHITELIST:
+                if name in existing:
+                    out['tables_existing'].append(name)
+                    try:
+                        out['rows'][name] = conn.execute(
+                            'SELECT COUNT(*) FROM ' + name
+                        ).fetchone()[0]
+                    except Exception as e:
+                        out['rows'][name] = 'ERR: ' + str(e)
+                else:
+                    out['tables_missing'].append(name)
+            conn.close()
+        else:
+            out['recommendations'].append(
+                '数据库文件不存在: ' + out['db_path'] +
+                ' — 点击 "跑 Migration" 按钮，或检查 Flask CWD 是否正确'
+            )
+        # 扫本地可用的 migration 脚本
+        scripts_dir = os.path.join(PROJECT_ROOT, 'scripts')
+        if os.path.isdir(scripts_dir):
+            for fn in sorted(os.listdir(scripts_dir)):
+                if fn.startswith('migrate_') and fn.endswith('.sql'):
+                    out['migrations_found'].append(fn)
+        # 建议
+        if out['tables_missing']:
+            out['recommendations'].append(
+                '缺失 %d 张表 — 点击 "🔧 跑 Migration" 按钮补齐 schema'
+                % len(out['tables_missing'])
+            )
+        if out['db_exists']:
+            empty = [t for t, c in out['rows'].items() if c == 0]
+            if len(empty) >= 3:
+                out['recommendations'].append(
+                    '%d 张表空 — 点击 "📥 灌演示种子" 按钮生成 5 天演示数据'
+                    % len(empty)
+                )
+    except Exception as e:
+        out['error'] = str(e)
+    return Response(
+        json.dumps(out, ensure_ascii=False, indent=2, default=str),
+        mimetype='application/json',
+    )
+
+
+# ---- V5.1 维护动作：白名单执行脚本（仅开发机/本机；板端按需打开）----
+_MAINTENANCE_ACTIONS = {
+    'seed_v50': {
+        'label': '灌 V5.0 演示种子（5 天 × 成对 voice/llm）',
+        'script': 'scripts/seed_v50_unified.py',
+        'kind': 'python',
+    },
+    'cleanup': {
+        'label': '清所有假数据（保真实 is_demo_seed=0 行）',
+        'script': 'scripts/cleanup_fake_data.py',
+        'kind': 'python',
+    },
+    'seed_models': {
+        'label': '灌模型 + embeddings 种子',
+        'script': 'scripts/seed_models_and_embeddings.py',
+        'kind': 'python',
+    },
+    'migrate_core': {
+        'label': '跑 core migration（voice_sessions 等 3 张新表）',
+        'script': 'scripts/migrate_2026_04_20.sql',
+        'kind': 'sql',
+    },
+    'migrate_models': {
+        'label': '跑 model migration（model_registry + embeddings）',
+        'script': 'scripts/migrate_2026_04_20_models.sql',
+        'kind': 'sql',
+    },
+}
+
+
+@app.route('/api/db/maintenance/<action>', methods=['POST'])
+def api_db_maintenance(action):
+    """V5.1 · 执行白名单维护脚本，返回 stdout/stderr 供前端展示。
+
+    安全：
+      - 动作必须在 _MAINTENANCE_ACTIONS 白名单里
+      - 只执行项目内 scripts/ 目录下的文件
+      - 60s 超时
+      - 允许用 IRONBUDDY_DB_MAINT=0 环境变量关闭（板端默认可按需关）
+    """
+    if os.environ.get('IRONBUDDY_DB_MAINT', '1') == '0':
+        return Response(
+            json.dumps({
+                'ok': False,
+                'error': '维护 API 已被环境变量 IRONBUDDY_DB_MAINT=0 关闭',
+            }, ensure_ascii=False),
+            status=403, mimetype='application/json'
+        )
+    if action not in _MAINTENANCE_ACTIONS:
+        return Response(
+            json.dumps({
+                'ok': False,
+                'error': 'action not in whitelist',
+                'available': list(_MAINTENANCE_ACTIONS.keys()),
+            }, ensure_ascii=False),
+            status=400, mimetype='application/json'
+        )
+    spec = _MAINTENANCE_ACTIONS[action]
+    script_path = os.path.join(PROJECT_ROOT, spec['script'])
+    if not os.path.isfile(script_path):
+        return Response(
+            json.dumps({
+                'ok': False, 'error': 'script not found',
+                'path': script_path,
+            }, ensure_ascii=False),
+            status=404, mimetype='application/json'
+        )
+
+    import subprocess
+    t0 = time.time()
+    try:
+        if spec['kind'] == 'python':
+            proc = subprocess.run(
+                ['python3', script_path],
+                cwd=PROJECT_ROOT,
+                capture_output=True, timeout=60,
+            )
+            stdout = proc.stdout.decode('utf-8', errors='replace')
+            stderr = proc.stderr.decode('utf-8', errors='replace')
+            rc = proc.returncode
+        elif spec['kind'] == 'sql':
+            # 用 Python 的 sqlite3 模块直接跑 SQL 脚本（避免依赖系统 sqlite3 CLI）
+            import sqlite3 as _sq
+            with open(script_path, 'r', encoding='utf-8') as f:
+                sql_text = f.read()
+            # 备份一份
+            db_path = _db_view_path()
+            bak = db_path + '.bak_' + str(int(time.time()))
+            if os.path.exists(db_path):
+                import shutil
+                shutil.copy2(db_path, bak)
+            conn = _sq.connect(db_path)
+            conn.executescript(sql_text)
+            conn.close()
+            stdout = '已执行 %s\n备份: %s' % (spec['script'], bak)
+            stderr = ''
+            rc = 0
+        else:
+            return Response(
+                json.dumps({
+                    'ok': False, 'error': 'unknown script kind',
+                }),
+                status=500, mimetype='application/json'
+            )
+    except subprocess.TimeoutExpired:
+        return Response(
+            json.dumps({
+                'ok': False, 'error': 'timeout (60s)', 'action': action,
+            }, ensure_ascii=False),
+            status=504, mimetype='application/json'
+        )
+    except Exception as e:
+        return Response(
+            json.dumps({
+                'ok': False, 'error': str(e), 'action': action,
+            }, ensure_ascii=False),
+            status=500, mimetype='application/json'
+        )
+    elapsed = round(time.time() - t0, 2)
+    return Response(
+        json.dumps({
+            'ok': rc == 0, 'action': action, 'label': spec['label'],
+            'returncode': rc, 'elapsed_s': elapsed,
+            'stdout': stdout[-4000:],  # 截尾防过长
+            'stderr': stderr[-2000:],
+        }, ensure_ascii=False),
+        mimetype='application/json'
+    )
+
+
+@app.route('/api/db/maintenance/list')
+def api_db_maintenance_list():
+    """V5.1 · 返回所有可用维护动作（给前端渲染按钮用）。"""
+    avail = [
+        {'key': k, 'label': v['label'], 'kind': v['kind'],
+         'script': v['script']}
+        for k, v in _MAINTENANCE_ACTIONS.items()
+    ]
+    return Response(
+        json.dumps({
+            'actions': avail,
+            'enabled': os.environ.get('IRONBUDDY_DB_MAINT', '1') != '0',
+        }, ensure_ascii=False),
+        mimetype='application/json'
+    )
+
+
+@app.route('/api/db/query/<table>')
+def api_db_query(table):
+    """读白名单表，支持动作筛选 / 种子开关 / 行数限制。
+
+    Query params:
+      exercise: 过滤 exercise 列（如果该表有）
+      seed: all(默认) / seed / live
+      limit: 默认 200，上限 2000
+    """
+    import sqlite3 as _sq
+
+    if table not in _DB_VIEW_WHITELIST:
+        return Response(
+            json.dumps({'error': 'table not in whitelist'}), status=400,
+            mimetype='application/json'
+        )
+    meta = _DB_VIEW_WHITELIST[table]
+
+    try:
+        limit = int(request.args.get('limit', 200))
+    except Exception:
+        limit = 200
+    limit = max(1, min(limit, 2000))
+
+    exercise = request.args.get('exercise', '').strip()
+    seed_mode = request.args.get('seed', 'all').strip().lower()
+
+    where = []
+    params = []
+    if exercise and meta['exercise_col']:
+        where.append(meta['exercise_col'] + '=?')
+        params.append(exercise)
+    if meta['seed_col']:
+        if seed_mode == 'seed':
+            where.append(meta['seed_col'] + '=1')
+        elif seed_mode == 'live':
+            where.append(meta['seed_col'] + '=0')
+
+    sql = 'SELECT * FROM ' + table
+    if where:
+        sql += ' WHERE ' + ' AND '.join(where)
+    sql += ' ORDER BY ' + meta['order_by']
+    sql += ' LIMIT ' + str(limit)
+
+    try:
+        conn = _sq.connect(_db_view_path())
+        conn.row_factory = _sq.Row
+        cur = conn.execute(sql, params)
+        cols = [d[0] for d in cur.description]
+        rows = [list(r) for r in cur.fetchall()]
+        conn.close()
+        return Response(
+            json.dumps({
+                'table': table, 'columns': cols, 'rows': rows,
+                'count': len(rows), 'limit': limit,
+                'filter': {'exercise': exercise, 'seed': seed_mode},
+            }, ensure_ascii=False, default=str),
+            mimetype='application/json'
+        )
+    except Exception as e:
+        return Response(
+            json.dumps({'error': str(e), 'sql': sql}), status=500,
+            mimetype='application/json'
+        )
+
+
+@app.route('/api/db/update/<table>/<int:row_id>', methods=['POST'])
+def api_db_update(table, row_id):
+    """隐藏写接口：只允许 voice_sessions + 白名单字段。用于伪造演示对话。
+
+    POST JSON: {"field": "transcript|response|summary|duration_s|trigger_src",
+                "value": "..."}
+    """
+    if table != 'voice_sessions':
+        return Response(
+            json.dumps({'ok': False, 'error': 'table not editable'}),
+            status=403, mimetype='application/json'
+        )
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+    except Exception:
+        body = {}
+    field = body.get('field', '')
+    value = body.get('value', '')
+    if not field:
+        return Response(
+            json.dumps({'ok': False, 'error': 'field required'}),
+            status=400, mimetype='application/json'
+        )
+    db = _get_db()
+    if db is None:
+        return Response(
+            json.dumps({'ok': False, 'error': 'db unavailable'}),
+            status=500, mimetype='application/json'
+        )
+    ok = db.update_voice_session_field(row_id, field, value)
+    return Response(
+        json.dumps({'ok': bool(ok), 'field': field, 'id': row_id},
+                   ensure_ascii=False),
+        status=(200 if ok else 400), mimetype='application/json'
+    )
+
+
+@app.route('/api/db/embeddings')
+def api_db_embeddings():
+    """(deprecated V5.0) 旧 PCA 散点接口，保留兼容；新前端已改用 feature_dist。
+    """
+    ex = request.args.get('exercise', '').strip() or None
+    db = _get_db()
+    points = db.get_feature_embeddings(ex) if db is not None else []
+    return Response(
+        json.dumps({'points': points, 'deprecated': True}, ensure_ascii=False),
+        mimetype='application/json'
+    )
+
+
+# ============================================================
+# V5.0 · 7D 维度对比：从真实 CSV 读 3 类样本，算直方图 + F 统计
+# ============================================================
+
+# 7 个维度定义（与 tools/dashboard.py 对齐）
+_FEAT_DIMS = ["Ang_Vel", "Angle", "Ang_Accel", "Target_RMS", "Comp_RMS",
+              "Symmetry_Score", "Phase_Progress"]
+_FEAT_CN = {
+    "Ang_Vel": "角速度", "Angle": "关节角度", "Ang_Accel": "角加速度",
+    "Target_RMS": "目标肌 EMG", "Comp_RMS": "代偿肌 EMG",
+    "Symmetry_Score": "对称性", "Phase_Progress": "动作阶段",
+}
+
+# label 映射：CSV 里是 golden/lazy/bad，前端想显示 standard/compensating/non_standard
+_LABEL_MAP = {
+    "golden": "standard",
+    "lazy": "compensating",
+    "bad": "non_standard",
+}
+
+# 每个 exercise × label 的 CSV 目录。优先真实采集，fallback 到 MIA/augmented。
+_CSV_DIRS = {
+    "bicep_curl": {
+        "golden": [
+            "data/bicep_curl/golden",
+            "data/bicep_curl_augmented/golden",
+        ],
+        "lazy": [
+            "data/bicep_curl/lazy",
+            "data/bicep_curl_augmented/lazy",
+        ],
+        "bad": [
+            "data/bicep_curl/bad",
+            "data/bicep_curl_augmented/bad",
+        ],
+    },
+    "squat": {
+        "golden": ["data/mia/squat/golden"],
+        "lazy":   ["data/mia/squat/lazy"],
+        "bad":    ["data/mia/squat/bad"],
+    },
+}
+
+# 每类最多合并多少个文件（控制内存与耗时）
+_MAX_FILES_PER_LABEL = 6
+# 每类最多采样多少行
+_MAX_ROWS_PER_LABEL = 6000
+
+
+def _load_feature_values(exercise, label, dim):
+    """读取指定 exercise×label 的 CSV，抽取某维列，返回 float 列表。"""
+    import csv as _csv
+    dirs = _CSV_DIRS.get(exercise, {}).get(label, [])
+    out = []
+    files_used = 0
+    for d in dirs:
+        abs_dir = os.path.join(PROJECT_ROOT, d)
+        if not os.path.isdir(abs_dir):
+            continue
+        for fn in sorted(os.listdir(abs_dir)):
+            if not fn.endswith(".csv"):
+                continue
+            files_used += 1
+            if files_used > _MAX_FILES_PER_LABEL:
+                break
+            fp = os.path.join(abs_dir, fn)
+            try:
+                with open(fp, "r", encoding="utf-8") as f:
+                    reader = _csv.DictReader(f)
+                    for row in reader:
+                        v = row.get(dim)
+                        if v is None or v == "":
+                            continue
+                        try:
+                            out.append(float(v))
+                        except ValueError:
+                            pass
+                        if len(out) >= _MAX_ROWS_PER_LABEL:
+                            return out
+            except Exception:
+                pass
+        if files_used > _MAX_FILES_PER_LABEL:
+            break
+    return out
+
+
+def _hist_bins(values, bin_count, vmin, vmax):
+    """把 values 分到 bin_count 个 bin，返回每个 bin 的计数（归一化到比例）。"""
+    if vmax <= vmin:
+        return [0] * bin_count
+    step = (vmax - vmin) / bin_count
+    bins = [0] * bin_count
+    for v in values:
+        idx = int((v - vmin) / step)
+        if idx < 0:
+            idx = 0
+        elif idx >= bin_count:
+            idx = bin_count - 1
+        bins[idx] += 1
+    total = sum(bins) or 1
+    return [round(b / total, 4) for b in bins]
+
+
+def _f_statistic(groups):
+    """单因素方差分析的 F 统计（越大越可分）。groups: list[list[float]]。"""
+    groups = [g for g in groups if len(g) >= 2]
+    if len(groups) < 2:
+        return 0.0
+    all_vals = [v for g in groups for v in g]
+    grand_mean = sum(all_vals) / len(all_vals)
+    # 类间 (between-group) 平方和
+    ss_b = sum(len(g) * ((sum(g) / len(g) - grand_mean) ** 2) for g in groups)
+    # 类内 (within-group) 平方和
+    ss_w = 0.0
+    for g in groups:
+        m = sum(g) / len(g)
+        ss_w += sum((v - m) ** 2 for v in g)
+    df_b = len(groups) - 1
+    df_w = len(all_vals) - len(groups)
+    if df_w <= 0 or ss_w <= 0:
+        return 0.0
+    ms_b = ss_b / df_b
+    ms_w = ss_w / df_w
+    return ms_b / ms_w if ms_w > 0 else 0.0
+
+
+@app.route('/api/db/feature_dist')
+def api_db_feature_dist():
+    """V5.0 · 7D 维度对比。
+    Query:
+      exercise: bicep_curl / squat （默认 bicep_curl）
+      dim: 指定维度（若缺省，返回全部 7 个维度的 F 统计）
+      bins: 直方图柱数（默认 24）
+    Response:
+      { dim, exercise, bins, range: [vmin, vmax],
+        hist: { standard: [...], compensating: [...], non_standard: [...] },
+        counts: { standard: N, compensating: N, non_standard: N },
+        f_stat, all_dims_f: { dim: f_stat, ... } }
+    """
+    ex = request.args.get('exercise', 'bicep_curl').strip()
+    dim = request.args.get('dim', '').strip()
+    try:
+        bins = int(request.args.get('bins', 24))
+    except Exception:
+        bins = 24
+    bins = max(8, min(bins, 60))
+
+    if ex not in _CSV_DIRS:
+        return Response(
+            json.dumps({'error': 'unknown exercise',
+                        'available': list(_CSV_DIRS.keys())}),
+            status=400, mimetype='application/json'
+        )
+
+    # 收集 3 类数据
+    groups = {}  # label -> list[float]（指定 dim 列）
+    all_dims_data = {}  # label -> { dim: list[float] }
+    labels_raw = ("golden", "lazy", "bad")
+    for lbl in labels_raw:
+        if dim:
+            groups[lbl] = _load_feature_values(ex, lbl, dim)
+        else:
+            # 全维度扫描（用于算 all_dims_f）
+            all_dims_data[lbl] = {}
+            for d in _FEAT_DIMS:
+                all_dims_data[lbl][d] = _load_feature_values(ex, lbl, d)
+
+    # 计算全部维度的 F 统计（给下方表格）
+    all_dims_f = {}
+    if dim:
+        # 指定维度时只算这一个；其他维度要单独扫一遍（慢但数据小够快）
+        for d in _FEAT_DIMS:
+            if d == dim:
+                gs = [groups[l] for l in labels_raw]
+            else:
+                gs = [_load_feature_values(ex, l, d) for l in labels_raw]
+            all_dims_f[d] = round(_f_statistic(gs), 3)
+        cur_dim = dim
+    else:
+        # 未指定 dim 时，挑 F 最大的那个做默认
+        for d in _FEAT_DIMS:
+            gs = [all_dims_data[l][d] for l in labels_raw]
+            all_dims_f[d] = round(_f_statistic(gs), 3)
+        cur_dim = max(all_dims_f.keys(), key=lambda k: all_dims_f[k])
+        groups = {l: all_dims_data[l][cur_dim] for l in labels_raw}
+
+    # 计算范围
+    all_vals = [v for vs in groups.values() for v in vs]
+    if not all_vals:
+        return Response(
+            json.dumps({
+                'error': 'no data',
+                'exercise': ex, 'dim': cur_dim,
+                'hint': 'CSV 目录为空或列名不匹配',
+            }, ensure_ascii=False),
+            status=200, mimetype='application/json'
+        )
+    vmin = min(all_vals)
+    vmax = max(all_vals)
+    # 边缘留 5% 余量
+    pad = (vmax - vmin) * 0.05
+    vmin_p = vmin - pad
+    vmax_p = vmax + pad
+
+    hist = {}
+    counts = {}
+    for lbl_raw in labels_raw:
+        lbl_new = _LABEL_MAP[lbl_raw]
+        vs = groups.get(lbl_raw, [])
+        hist[lbl_new] = _hist_bins(vs, bins, vmin_p, vmax_p)
+        counts[lbl_new] = len(vs)
+
+    # F 统计（仅 cur_dim）
+    f_stat = all_dims_f.get(cur_dim, 0.0)
+    # 雷达图数据：每类在每个维度上的均值（归一化到 [0,1]）
+    radar = _compute_radar(ex, labels_raw)
+
+    return Response(
+        json.dumps({
+            'exercise': ex,
+            'dim': cur_dim,
+            'dim_cn': _FEAT_CN.get(cur_dim, cur_dim),
+            'bins': bins,
+            'range': [round(vmin_p, 4), round(vmax_p, 4)],
+            'hist': hist,
+            'counts': counts,
+            'f_stat': round(f_stat, 3),
+            'all_dims_f': all_dims_f,
+            'all_dims_cn': _FEAT_CN,
+            'radar': radar,
+        }, ensure_ascii=False),
+        mimetype='application/json'
+    )
+
+
+def _compute_radar(exercise, labels_raw):
+    """返回雷达图数据：每维度每类均值归一化到 [0,1]。
+    归一化方式：把该维度下 3 类的全样本 min/max 映射到 0/1。
+    """
+    out = {"dims": _FEAT_DIMS, "dims_cn": [_FEAT_CN[d] for d in _FEAT_DIMS],
+           "series": {}}
+    dim_stats = {}  # dim -> (min, max, {lbl: mean})
+    for d in _FEAT_DIMS:
+        per_lbl = {}
+        all_vals = []
+        for lbl_raw in labels_raw:
+            vs = _load_feature_values(exercise, lbl_raw, d)
+            if vs:
+                per_lbl[lbl_raw] = sum(vs) / len(vs)
+                all_vals.extend(vs)
+        if all_vals:
+            dim_stats[d] = (min(all_vals), max(all_vals), per_lbl)
+        else:
+            dim_stats[d] = (0, 1, {})
+    for lbl_raw in labels_raw:
+        lbl_new = _LABEL_MAP[lbl_raw]
+        series = []
+        for d in _FEAT_DIMS:
+            vmin, vmax, per_lbl = dim_stats[d]
+            mean = per_lbl.get(lbl_raw)
+            if mean is None or vmax <= vmin:
+                series.append(0.5)
+            else:
+                series.append(round((mean - vmin) / (vmax - vmin), 4))
+        out["series"][lbl_new] = series
+    return out
+
+
+@app.route('/api/db/exercises')
+def api_db_exercises():
+    """返回所有 distinct exercise 列表（用于前端 dropdown）。"""
+    import sqlite3 as _sq
+    names = set()
+    try:
+        conn = _sq.connect(_db_view_path())
+        for t in ('training_sessions', 'rep_events'):
+            try:
+                for r in conn.execute(
+                    'SELECT DISTINCT exercise FROM ' + t +
+                    ' WHERE exercise IS NOT NULL'
+                ):
+                    if r[0]:
+                        names.add(r[0])
+            except Exception:
+                pass
+        conn.close()
+    except Exception:
+        pass
+    return Response(
+        json.dumps({'exercises': sorted(names)}, ensure_ascii=False),
+        mimetype='application/json'
+    )
 
 
 if __name__ == '__main__':

@@ -32,5 +32,11 @@ for name in vision streamer mainloop emg voice; do
 done
 
 rm -f /tmp/ironbuddy_*.pid
+
+# Cloud SSH tunnel teardown
+pkill -f "[s]sh.*-L.*6006:127.0.0.1:6006" 2>/dev/null
+pkill -f "[c]loud_tunnel.py" 2>/dev/null
+pkill -f "[c]loud_tunnel.sh" 2>/dev/null
+
 echo "[$STAMP] ===== stop done =====" >> "$LOG"
 exit 0

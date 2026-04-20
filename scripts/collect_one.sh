@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BOARD_KEY="$HOME/.ssh/id_rsa_toybrick"
-TARGET="toybrick@10.105.245.224"
+TARGET="toybrick@10.18.76.224"
 
 # ── 参数检查 ──
 if [ $# -lt 3 ]; then

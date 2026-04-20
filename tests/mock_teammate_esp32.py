@@ -6,7 +6,7 @@ import random
 import math
 
 # 配置：将这里的 IP 指向 RK3399ProX 的内网地址
-TARGET_IP = "10.105.245.224"
+TARGET_IP = "10.18.76.224"
 TARGET_PORT = 5005
 
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

@@ -6,6 +6,60 @@
 
 ---
 
+## 📊 数据库访问速查（2026-04-19 V4.8）
+
+**路径**（板端）：`/home/toybrick/streamer_v3/data/ironbuddy.db`
+**路径**（WSL 开发）：`/home/qq/projects/embedded-fullstack/data/ironbuddy.db`（如不存在，板端是真相源）
+
+**访问方式**：
+
+```bash
+# 方式 A: 直接 SSH 到板端用 sqlite3 CLI
+ssh -i ~/.ssh/id_rsa_toybrick toybrick@10.18.76.224
+sqlite3 /home/toybrick/streamer_v3/data/ironbuddy.db
+  > .tables
+  > SELECT * FROM training_sessions ORDER BY id DESC LIMIT 10;
+
+# 方式 B: 拉到本地浏览（推荐）
+scp -i ~/.ssh/id_rsa_toybrick toybrick@10.18.76.224:/home/toybrick/streamer_v3/data/ironbuddy.db /tmp/ib.db
+# 用 DB Browser for SQLite (或 TablePlus/Beekeeper) 打开 /tmp/ib.db
+
+# 方式 C: Python 程序化读
+python3 -c "
+import sqlite3
+c = sqlite3.connect('/home/toybrick/streamer_v3/data/ironbuddy.db')
+for r in c.execute('SELECT ts, trigger, substr(response,1,80) FROM llm_log ORDER BY id DESC LIMIT 20'):
+    print(r)
+"
+```
+
+**六张表（schema 见 `hardware_engine/persistence/db.py:37-93`）**：
+
+| 表名 | 用途 | 写入方 |
+|---|---|---|
+| `training_sessions` | 每次训练 session（id / 开始-结束时间 / 动作 / 好坏计数 / 峰值疲劳 / 时长） | FSM `main_claw_loop._ds_wrapper` |
+| `rep_events` | 每个 rep 详情（session_id / 时戳 / is_good / 膝角最小值 / EMG 目标/代偿 RMS） | FSM `rep-complete` 回调 |
+| `llm_log` | 所有 DeepSeek 调用（触发源 / prompt / response / token 数） | FSM + voice_daemon |
+| `daily_summary` | 每日聚合（好坏计数 / 累计疲劳 / 最佳连贯数） | OpenClaw daemon 23:00 汇总 |
+| `user_config` | 用户偏好（key-value, key 以 `user_preference.` 开头） | OpenClaw daemon 偏好学习 |
+
+**凭证配置位置**（不是 DB，是平文件）：`/home/toybrick/streamer_v3/.api_config.json`
+V4.8 起所有 key 硬件化写入并大小写兼容（UPPERCASE 主，lowercase 兜底）：
+```json
+{
+    "DEEPSEEK_API_KEY": "sk-...", "BAIDU_APP_ID": "12289...", "BAIDU_API_KEY": "...",
+    "BAIDU_SECRET_KEY": "...", "FEISHU_APP_ID": "cli_...", "FEISHU_APP_SECRET": "...",
+    "FEISHU_CHAT_ID": "oc_...", "CLOUD_RTMPOSE_URL": "http://127.0.0.1:6006/infer",
+    "CLOUD_SSH_HOST": "connect.westd.seetacloud.com", "CLOUD_SSH_PORT": 42924,
+    "CLOUD_SSH_USER": "root", "CLOUD_SSH_PASSWORD": "...", "CLOUD_LOCAL_TUNNEL_PORT": 6006,
+    "llm_backend": "direct"
+}
+```
+UI Settings Tab 读写这个文件（`/api/admin/api_config` GET/POST），SSH 凭证不通过 UI 暴露。
+
+---
+
+
 ## §I. 双视觉模式（Cloud RTMPose ↔ 本地 YOLOv5-Pose NPU）
 
 **决策**：视觉推理支持两种模式热切换，运行时写信号文件即可切换，无需重启。
@@ -493,6 +547,20 @@ kc = float(_sigmoid(block[6 + k*3 + 2, i, j]))              # sigmoid only on co
 - 关键点间距检查（L218-221）
 - One-Euro 平滑滤波器（`cloud_rtmpose_client.py:489-491`）
 
+### 坑 10：【已平反】ALSA设备被僵尸进程独占导致的硬件损坏误判（2026-04-18）
+
+**现象**：手动运行 `amixer` + `arecord` 进行硬件底层麦克风探测时，终端频繁报错 `Device or resource busy`，且早些时候直接录出全零（peak=1）音频数据。外加查看到内核曾吐出 `es7243 7-0013: i2c_transfer() returned -6`，导致我们在 2026-04-17 一度错误地判定主板上的 ES7243 麦克风阵列芯片已发生物理烧毁。
+
+**根因（真相大白）**：硬件完全健康！这其实是一个典型的**底层声卡被僵尸孤儿进程独占持有**导致的资源阻塞 Bug。
+1. 前文（坑8）已提及 `SIGTERM (kill -15)` 无法杀死 Python 后台开启的子进程。当我们退出或重启服务器时，旧的 `voice_daemon.py` 以及它拉起的 `arecord` 监听守护，立刻变成了不死僵尸。
+2. 这些僵尸进程在暗处 24 小时死死咬住 ALSA 的 `/dev/snd` (`hw:0,0`) 不放。
+3. Linux ALSA 在不支持并发混音抓取时，任何外部探测指令（连带有测试权限的用户）要么被硬挡回 `busy`，要么只抓到真空间隙的 `全 0` 数据。而那条吓人的 `i2c_transfer returned -6` 仅仅是总线高压竞争下的轻度断连毛刺。
+
+**解决（恢复原状）**：
+1. 执行彻底清场：`sudo pkill -9 -f "voice_daemon"` 且 `sudo killall -9 arecord aplay`。清锁后硬件表现堪称完美！
+2. **彻底撤回并作废一切关于使用 USB 外置摄像头的降级替代计划（环境变量 `VOICE_FORCE_MIC`）**。
+3. 系统全面恢复默认的板载阵列麦克风（Main Mic / `hw:0,0`）作为统一收音源。
+
 ---
 
 ## §XII. 当前状态与下一步
@@ -513,7 +581,7 @@ kc = float(_sigmoid(block[6 + k*3 + 2, i, j]))              # sigmoid only on co
 
 来源：`architecture.md` Sprint 5 已知问题清单（L99-109）
 
-- [ ] 语音唤醒不工作：voice_daemon 启动但喊"教练"无反应，需 debug 录音→STT→匹配全链路
+- [x] ~~语音唤醒不工作：voice_daemon 启动但喊"教练"无反应~~ → **根因定位完成（2026-04-17，坑 10）**：板子 ES7243 麦阵列芯片 i2c 物理损坏，所有 `hw:0,0` / `hw:3,0` 板载拾音通路死透。已完成 voice_daemon 软件侧修复（mixer 自动激活 + VAD 600/400 + 板载 hw:0,0 默认）并部署到板上 pid 2879；运行态需 `VOICE_FORCE_MIC=plughw:2,0` 降级 USB Webcam 麦
 - [ ] 违规检测不准：几乎所有动作判标准，量化模型精度本身差
 - [ ] 音箱不响：amixer 已设 SPK_HP 但实测仍无声，需板端硬件实测
 - [ ] 网页无视频：拔掉 HDMI 后 MJPEG:8080 没自动回退
@@ -528,3 +596,389 @@ kc = float(_sigmoid(block[6 + k*3 + 2, i, j]))              # sigmoid only on co
 - `_SimpleDF` 内建类是 pandas 的临时替代，DataFrame 操作不完整
 - SSL 验证全局关闭（`ssl.CERT_NONE`，`session.verify = False`）
 - 飞书 app_secret 硬编码在 `architecture.md`（应仅存于 `.api_config.json`）
+
+---
+
+## §XIII. V4.3 FLEX-DA 决策链（2026-04-18）
+
+> **触发**：用户 2026-04-18 早晨 prompt（取消深蹲、化简两大部分、全面拥抱 FLEX）
+> **执行计划**：[flex-curl-only-pivot.md](file:///home/qq/.claude/plans/flex-curl-only-pivot.md)
+> **对 SOP 的影响**：[明日训练SOP.md](明日训练SOP.md) 已重写化简（删时间表 + 删深蹲）
+
+### 1. 背景：硬件瘦身 → 任务瘦身
+
+用户实地确认：只剩 **2 张 sEMG 贴片**（CH0 肱二头肌发力点 + CH1 小臂中段代偿点）。深蹲需要 ≥ 4 贴片（股四 + 臀 + 腘绳 + 腓肠），不可行。**V4.3 砍掉深蹲，100% 锁定哑铃弯举**单动作。
+
+连锁反应：
+- FSM 层：`SquatStateMachine` 继续保留代码但数据端不再喂样本
+- 数据集：`data/v42/<user>/squat/` 停止新增，既有样本仅做 archive
+- 训练：`tools/train_fusion_head.py --exercise squat` 不再调用
+
+### 2. 数据源换轨：Ninapro / Camargo → FLEX 主 + HSBI 兜底
+
+**为什么淘汰**：
+- **Ninapro DB2**：手部动作（抓握、指伸），非弯举任务，非同肌肉群
+- **Camargo 2021**：下肢步态 + 楼梯，与深蹲砍掉一起失效
+
+**为什么 FLEX**（`github.com/HaoYin116/FLEX_AQA_Dataset`，NeurIPS 2025）：
+- **38 人 × 20 健身动作 × 7500+ rep**，含多种弯举变体
+- **4 通道 sEMG @ 200Hz**（不是调研报告说的 16 通道，实读 `datasets/SevenPair.py:79-99` 确认）
+- **AQA 连续质量分 0-100**（`configs/Seven_CoRe.yaml:12 score_range:100`）→ 可阈值化为三类
+- 5 视角视频 + 21 点骨架
+
+**HSBI 兜底**（DOI 10.57720/1956）：无账号公开下载，纯 biceps brachii sEMG，用于 J1/J2 基线 MDF/MNF（87±15Hz 标准）+ 应急轻量预训练。
+
+### 3. DA 范式：FLEX base pretrain + 本地 fine-tune
+
+**合法 transfer 依据**（非伪迁移）：
+- **同任务**：哑铃弯举 vs 多种弯举变体
+- **同模态**：sEMG @ 200Hz，4 通道
+- **同肌肉群**：biceps brachii + forearm flexor
+
+**范式**（保持朴素，不用 DANN/CORAL/MMD）：
+1. Stage 1：FLEX ~1500-3000 rep 上跑 masked AE 预训练 → `emg_encoder_flex_pretrained.pt`
+2. Stage 2：本地 270 rep freeze 前 N 层 + 解锁末 GRU 层 + 训 fusion head → `v42_fusion_head_curl_da.pt`
+3. Stage 3：板端 `main_claw_loop` 加载 DA 权重，接口零改动
+
+### 4. 架构不动：保留 GRU(hidden=6)×8d
+
+**用户决策 2026-04-18**：不因 FLEX 数据量换 ResNet18（11M 参数）。理由：
+- 板端 RK3399ProX NPU 推不动 11M 模型
+- FLEX 的价值是**数据多样性**不是**模型容量**
+- fusion head 参数预算 ≤ 200，整模型 ≤ 800（现 664）保持不变
+
+### 5. 通道映射：硬编码不随机抽
+
+用户明确要求：**不能随机抽通道**。决策：
+```python
+FLEX_CH_TARGET = 0    # col[0] L_main biceps brachii
+FLEX_CH_COMP   = 1    # col[1] L_sub forearm flexor
+FLEX_CURL_CLASS_IDS = [7, 17, 18, 19]  # SevenPair Single 组推断值
+```
+
+**自动验证**：前 5 rep 算 `Target_RMS` vs `elbow_angle` 的 Pearson |r|；|r| > 0.6 通过，否则自动遍历 `[2,3]`/`[0,2]`/`[1,3]` 挑最高。结果写 `data/flex/_channel_mapping.json`。
+
+`FLEX_CURL_CLASS_IDS` 是临时推断（基于 `datasets/SevenPair.py:17` 的 A01..A20 命名 + Single 分组规则），拿到论文 supplementary table 后 2 行修正。
+
+### 6. score → 三类阈值化
+
+```python
+LABEL_THRESHOLDS_DEFAULT = (80, 50)
+# score >= 80 → standard
+# score >= 50 → compensation
+# else        → bad_form
+```
+
+**依据**：SENIAM 经验「standard ≥ 80% MVC efficiency」+ FLEX score_range=100 满分制。启动后打印三类样本计数，若某类 <10% 则 warn 并提示 `--thresholds 75,45` 重跑。
+
+### 7. 本地数据量：9 段 60s（DA 文献下限）
+
+**答案**：**3 人 × 3 类 × 1 段 60s = 9 段**（≈ 270 rep 等效）+ 第 4 人 holdout 3 段。
+
+**为什么 9 段够**：
+- 每段 60s ≈ 25–30 rep（rep ~ 2–2.5s 节拍）
+- DA 文献经验：fine-tune 下限 30 rep / 类
+- 总录制 9 分钟 + 贴片/MVC/重测 30 分钟/人 → 半天搞定
+
+**不升级**（不取 18 段）的理由：边际收益低 + 60s 连续疲劳污染风险大。
+
+### 8. 板端旧脚本：旁路升级 zero-invasion
+
+**保留黄金代码**：`/home/toybrick/streamer_v3/{start_collect.sh, collect_one.sh}` 继续输出 7D CSV，**不修改板端**。
+
+**本地 wrapper**：`tools/upgrade_collect_7d_to_11d.py` 做 `scp` + raw EMG 频域计算 (`scipy.signal.welch`) + `Angle` peak-finding 切 rep。raw 文件拿不到时内置兜底：ZCR 用 RMS 滑窗估算，MDF/MNF 用包络近似。
+
+**好处**：
+- 板端 Python 3.7 / 无 pandas 限制下不需动
+- FSM 主路径零风险
+- V4.2 既有 `validate_v42_dataset.py` 直接复用验证
+
+### 引用
+
+- 执行计划：[flex-curl-only-pivot.md](file:///home/qq/.claude/plans/flex-curl-only-pivot.md)
+- 用户决策时间戳：2026-04-18 早晨
+- FLEX 源码实读：`/tmp/flex_aqa/datasets/SevenPair.py`, `models/emg_encoder.py`, `configs/Seven_CoRe.yaml`
+
+### §XIII.9 V4.3 → V4.4 pivot：公开数据集尽职调查失败，改走本地 augment
+
+**时间**：2026-04-18 早晨
+
+**触发**：用户发现 FLEX license 需 24-72h 审批明天拿不到，要求评估 `公开数据集/` 目录下的三个备选（EMAHA-DB6 / MIA / Mendeley）能否替代。
+
+**调查结论**（铁证见 [`公开数据集/README.md`](../../公开数据集/README.md) §3）：
+
+1. **FLEX**：License 申请 24-72h，明天不到位
+2. **MIA** (Muscles in Action, ICCV 2023)：16 动作全下肢 + 武术，**零弯举动作**（证据：`inference_scripts/retrieval_id_nocond_exercises_posetoemg.py:119-141` 完整 exercise 字典）。有 GoodSquat/BadSquat 标签 → 留给 V4.4 深蹲
+3. **EMAHA-DB4** (Harvard Dataverse doi:10.7910/DVN/IFPNRK)：实际是 ADL（坐/站/走），不是弯举（v1 + v2 文件清单全是 `Sub0X_ADL_HONOR_{SIT,STANDING,WALKING}.mat`）
+4. **EMAHA-DB5**（含弯举版）：搜索全网未公开发布
+5. **Mendeley 8j2p29hnbv**：**采样率只有 1 Hz**（webfetch 确认），只能看 envelope，无法算 MDF/MNF/ZCR 四个频域列
+6. **HSBI biceps**：Bielefeld Anubis JS 反爬，命令行拿不到
+
+**决策**：
+
+- **放弃公开数据集做弯举 base pretrain**
+- 采用**本地 9 段 60s × 3 人 + 10× augment** 替代（`tools/augment_local.py`）
+- FLEX 到位后**不抛弃**，复活已写好的 `tools/flex_preprocess.py`（`tools/pretrain_encoders.py --source flex` 分支）
+- **MIA 52.9GB 继续下载**，留给未来的深蹲子项目（V4.4+）
+- Mendeley 1Hz envelope 数据保留，仅作 "疲劳→EMG 下降" 生理 sanity check，不进训练循环
+
+**影响**：
+
+- 明天弯举 LOSO F1 预期目标从 ≥0.65（FLEX 加持）降到 ≥0.60（纯本地 augment）
+- Holdout 第 4 人 compensation 召回目标从 ≥70% 降到 ≥65%，bad_form ≥75%（≥80% → ≥75%）
+- 明天时间窗省下了 FLEX 解压 + pretrain 的 30 分钟
+
+**架构不变**：
+
+- GRU(hidden=6)×8d encoder + 21d 融合头 + 66 参数 FusionHead（≤200 红线）
+- 板端推理路径零改动
+- 全部前轮产出（V4.2 + V4.3 FLEX 脚本）保留不删，等 FLEX 到位可切
+- HSBI DOI：10.57720/1956 (`https://pub.uni-bielefeld.de/record/2956029`)
+
+---
+
+## §XIV. 决策 12：弯举动态 MVC 校准 + 10× augment 重训（V4.7）
+
+> 日期：2026-04-19 · 主线：B · 前置：V4.6 硬件域对齐（决策 10）
+
+### 问题陈述
+
+V4.6 留下两个弯举短板：
+
+1. **MVC 基准硬编码 `/400`**：`udp_emg_server.py` 的分母对每个使用者都是 400，但不同个体肌肉基础 RMS 能差 3× 以上——瘦子 MVC 可能只有 150，健身老哥可能 800。硬编码 400 会让瘦子总撞 0、老哥全饱和到 100，GRU 三头分类因输入分布漂移而退化
+2. **弯举训练数据稀薄**：MIA 深蹲数据集里零弯举（决策 9 已证），自采只有 3 份 CSV（3050 行 ≈ 3 min），早期跑 val_acc 约 50-60%，接近随机猜
+
+### 为何需要动态 MVC（第一性原理）
+
+- EMG 信号本质是**肌肉纤维募集密度的宏观积分**，同一块肌肉在不同人身上基础值差异巨大（肌电阻抗 + 皮下脂肪厚度 + 纤维类型比例）
+- 硬编码 `/400` 等价于"假设所有用户都是同一个被试"——这就是为什么 V4.6 的 `domain_calibration.json` 做完后，板端还有用户反馈"不出力也显示 20%"或"使劲也只有 40%"
+- SENIAM 肌电协议推荐**个体 MVC (Maximum Voluntary Contraction)**：让用户在开始训练前用最大力等长收缩目标肌肉 3-5 秒，取 RMS 峰值作为该个体的 100% 基准
+
+### 3 秒峰值法协议（极简版 MVC）
+
+**触发路径**：
+
+```
+前端按钮 → POST /api/mvc_calibrate
+  └─ 写 /dev/shm/mvc_calibrate.request           （Flask 端）
+        └─ udp_emg_server._check_mvc_request()    （每拍 33Hz 检测）
+              └─ 进入 3s 采集窗口：DSP 线程对每个 ch 记录 rms 峰值
+                    └─ 到期 → 写 hardware_engine/sensor/mvc_values.json
+                            → 写 /dev/shm/mvc_calibrate.result
+                            → 热更新 _MVC_VALUES dict（下一拍立即使用新分母）
+  └─ Flask 轮询 .result 文件 5 秒 → 返回 JSON
+```
+
+**为何 3 秒而非 5 秒**：
+
+- 用户主动发力等长收缩下，RMS 峰值通常在前 1.5s 即达到（快速纤维优先募集）
+- 3s 窗口既够采到真实峰值，又避免用户疲劳导致峰值滑坡
+- 实测 `_MVC_CAL_WINDOW_SEC = 3.0` 在 io_dumper 33Hz 检测下窗口误差 < 30ms，完全可接受
+
+**钳位保护（硬红线）**：
+
+- `50.0 <= mvc <= 2000.0`：超出区间的值视为异常（空气或电极脱落），自动回退 400
+- `mvc_values.json` 丢失 / NaN / 损坏 → 自动回退 400 硬编码行为，不会比 V4.6 更差
+
+### augment 策略（为何这样、为何不那样）
+
+**为何不用 pandas**：
+
+- 板端 Python 3.7 无 pandas（见 `toybrick_board_rules.md`），工具脚本强制保持可移植
+- numpy + csv 标准库足够，总代码 < 170 行
+
+**为何只扰动 Target_RMS / Comp_RMS 两列**：
+
+- `Angle / Ang_Vel / Ang_Accel` 是**几何量**（视觉推算），动弯举姿态本身没变；扰动这几列会编造不可能的关节运动
+- `Symmetry_Score / Phase_Progress` 是 FSM 算出的派生量，扰动它们等价于重写标签
+
+**三种扰动叠加顺序**：
+
+1. 时间扭曲 `uniform(0.9, 1.1)` —— 模拟用户做动作快慢差异（numpy.interp 1D 实现，拒绝 scipy 依赖）
+2. 幅值扰动 `× uniform(0.85, 1.15)` —— 模拟个体肌力差异
+3. 高斯噪声 `+ N(0, 1.5)` 再 `clip [0,100]` —— 模拟 ESP32 电极贴合噪声
+
+**为何 10×（而非 30×）**：
+
+- 3 × 10 = 30 aug + 3 seed = 33 份 ≈ 33k 行，已充分喂满 GRU(hidden=16, params=1488) 的容量红线
+- 再多是过拟合噪声而非学本质（经验法则：aug 倍数 ≤ 原始信号的"物理自由度"）
+
+### 训练结果（2026-04-19 09:41）
+
+```
+Dataset:  32560 windows (27676 train / 4884 val)
+Classes:  standard=31.2% / compensating=34.4% / non_standard=34.3%
+Model:    CompensationGRU, 1488 params, hidden=16, input=7D
+Epochs:   20 · Device: CPU · Batch: 32 · LR: 0.005 cos anneal
+
+Best val acc: 100.0% @ epoch 20
+Sim scores:   standard≈1.000 / compensating≈0.500 / non_standard≈0.200
+```
+
+**质疑与诚实标注**：val_acc=100% 高于预期 ≥75% 很多，原因是 augment 数据集里同一 seed 的 aug1/aug3/seed 会随机 split 到 train 和 val（同源泄漏）。**这表明模型至少学会了区分三类 seed 的本质信号**，但**不代表在完全新用户上 100% 正确**。板端真实 A/B 才是验收金线。
+
+### A/B 验证路径
+
+```bash
+# 本地部署
+cp models/extreme_fusion_gru_curl.pt hardware_engine/cognitive/
+
+# 板端切权重（scripts/switch_model.sh 已支持 curl）
+bash scripts/switch_model.sh curl
+
+# 现场 MVC 校准
+curl -X POST http://<board_ip>:5000/api/mvc_calibrate
+# 用户最大力做 3 秒弯举后返回 {ok, target, comp, duration_ms}
+
+# A/B：做 3 标准 + 3 代偿，查看 /dev/shm/fsm_state.json 的 classification 翻转
+```
+
+### 回退（硬红线：一键退回 V4.6 行为）
+
+```bash
+# 一键回退 MVC（自动回 400 硬编码）
+rm -f hardware_engine/sensor/mvc_values.json
+
+# 一键回退权重（若训前有备份）
+# [ -f models/extreme_fusion_gru_curl_legacy.pt ] && mv models/extreme_fusion_gru_curl_legacy.pt models/extreme_fusion_gru_curl.pt
+```
+
+`_MVC_VALUES` 字典的 load 逻辑带异常容错：删 json → 下次启动回落 `{"target":400, "comp":400}`，V4.6 行为原样恢复。
+
+### 改动文件清单
+
+| 文件 | 行为 |
+|-----|------|
+| `hardware_engine/sensor/udp_emg_server.py` | +MVC 加载块 / +`_check_mvc_request()` / 分母 `/400` → `/_MVC_VALUES[ch_key]` |
+| `streamer_app.py` | +`/api/mvc_calibrate` POST 端点（轮询 5s） |
+| `tools/augment_curl_data.py` | 新建，3 → 33 份 CSV，33k 行 |
+| `data/bicep_curl_augmented/` | 新建输出目录 |
+| `models/extreme_fusion_gru_curl.pt` | 新权重（val_acc 100% on augmented split） |
+
+## §XIV. 决策 11：前后端双 LLM 闭环（DeepSeek 前端实时 + OpenClaw 后端常驻）
+
+**时间**：2026-04-19（V4.7 主线 A）
+
+**背景**：V4.6 前只有单一 `LLM_BACKEND` 环境变量二选一（DeepSeek / OpenClaw），缺少长期记忆与定时运营。用户要求形成"前端实时 / 后端常驻"各司其职的闭环，两者共享 SQLite 数据池。
+
+### 1) 分工对照表
+
+| 维度 | DeepSeek（前端实时） | OpenClaw（后端常驻） |
+|------|--------------------|--------------------|
+| 角色 | 实时教练 / 语音问答 / 训练总结 | 日常提醒 / 周报 / 偏好学习 |
+| 触发 | 用户语音 / UI 按钮 / 疲劳阈值 | cron 式定时（09:00 日 / 20:00 周 / 23:00 偏好）+ /dev/shm trigger 文件 |
+| 延迟预算 | ≤ 2 s | 无约束（30-60 s 可） |
+| 上下文 | **不注入长历史**，保持短视 | 全量 7 / 14 日 + 全部偏好注入 |
+| 背后模型 | deepseek-chat | Claude Opus/Sonnet via Gateway |
+| 飞书管线 | `/api/feishu/push`（App 认证） | `OpenClawBridge.deliver()`（Webhook） |
+| 数据写入 | log_rep / log_llm / start_session | user_config（偏好）+ daily_plan/weekly_report 的 llm_log |
+| 数据读取 | 仅当前战报（`_fetch_history_context`） | 全量 7/14 日扫描 + `get_user_preferences()` |
+
+### 2) 数据共享桥梁（SQLite）
+
+- 单一文件：`data/ironbuddy.db`（WAL 模式跨进程并发安全）
+- 关键新表/方法（V4.7 追加）：
+  - `FitnessDB.get_recent_chats(days=14)` → OpenClaw 周报/偏好学习的记忆源
+  - `FitnessDB.get_user_preferences()` → 所有 `user_preference.*` 键
+  - `FitnessDB.set_user_preference(key, value)` → 偏好学习任务写回
+  - `CognitiveNexus.build_daily_plan_prompt()` / `build_weekly_report_prompt()` / `build_preference_learning_prompt()`
+
+### 3) 飞书两条管线（并存，不互相替代）
+
+- **App 认证管线**：`streamer_app.py::/api/feishu/push`。鉴权严密，适合前端 UI 按钮触发的"训练总结"推送。
+- **Webhook 管线**：`OpenClawBridge.deliver(text, channel="feishu")`，走 `FEISHU_WEBHOOK` 环境变量。适合后端 daemon 定时推送（日计划 / 周报）。
+- **红线**：`/api/feishu/push` 不得动；`openclaw_daemon.py` 只能走 `deliver()`。
+
+### 4) 触发机制
+
+| 任务 | 时间触发 | 手动触发文件 |
+|------|--------|-------------|
+| 日计划 | 每日 09:00（`DAILY_PLAN_HOUR=9`） | `/dev/shm/openclaw_trigger_daily_plan` |
+| 周报 | 周日 20:00（`WEEKLY_REPORT_DOW=6` + `WEEKLY_REPORT_HOUR=20`） | `/dev/shm/openclaw_trigger_weekly_report` |
+| 偏好学习 | 每日 23:00（`PREFERENCE_HOUR=23`） | `/dev/shm/openclaw_trigger_preference_learning` |
+
+Daemon 每 60 s 轮询一次；时间触发使用"分钟 < 5 + 当日只跑一次"双判定，避免漂移与重复。手动触发文件处理后立即 `os.remove`。
+
+### 5) 回退方案
+
+- **停 daemon**：`pkill -f "[o]penclaw_daemon"` —— 飞书立即无后端推送，前端 DeepSeek 不受影响
+- **清假数据**：`python3 tools/seed_fake_chats.py --cleanup` 清 SEED 标记的 llm_log 与 4 条偏好
+- **全量回退**：`git checkout hardware_engine/persistence/db.py hardware_engine/cognitive/cognitive_nexus.py hardware_engine/main_claw_loop.py`
+- **Gateway 连不通**：daemon 3 次重试后静默，不抛异常、不影响主循环
+
+### 6) 文件清单（V4.7 A 主线改动）
+
+- **新增**：`hardware_engine/cognitive/openclaw_daemon.py`（~240 行）
+- **新增**：`scripts/start_openclaw_daemon.sh`（nohup + bracket trick）
+- **新增**：`tools/seed_fake_chats.py`（12 session + 180 rep + 30 llm + 4 偏好）
+- **新增**：`tools/test_memory_e2e.py`（只读验证脚本）
+- **修改**：`hardware_engine/persistence/db.py`（尾部 +3 方法）
+- **修改**：`hardware_engine/cognitive/cognitive_nexus.py`（尾部 +3 build_*_prompt）
+- **微改**：`hardware_engine/main_claw_loop.py`（_chat_handler 末尾 +5 行 log_llm "voice_chat"）
+
+### 7) 默认安全
+
+- `openclaw_daemon.py` **默认不自动启动**，不加入 `start_all_services.sh`；用户手动 `bash scripts/start_openclaw_daemon.sh` 拉起。
+- 重复启动防护：`pgrep -f "[o]penclaw_daemon.py"` 命中即跳过。
+- Python 3.7 兼容：全文未使用 `X | None`、`match/case`、海象运算符、`pandas`。
+
+---
+
+## V7.13 决策（2026-04-20）—— 推理测试阶段打地基
+
+### 1) 疲劳上限 UI 联动修复
+
+**问题**：语音命令"疲劳上限改为 1300"经 voice_daemon → `/dev/shm/fatigue_limit.json` + `ui_fatigue_limit.json` → streamer `/state_feed` 合并 `d.fatigue_limit` 已正确推到前端，但 `templates/index.html` 两处读的是**不存在的 DOM 节点** `cfgFatigueLimit`（曾经的设置面板 input 已被删除），导致显示 fallback 到硬编码 1500。
+
+**修复**（一次性两处）：
+- `index.html:2583-2585` `fatigueTargetDisplay` 的 textContent 直接赋值 `String(fatigueLimit)`
+- `index.html:2718-2720` `updateRig` 内的 "疲劳 X/Y" 字符串直接用函数形参 `fatigueLimit`
+
+**验收**：语音改 1300 → UI 顶部 5 格与进度条小字即时同步。
+
+### 2) 视觉帧率 15→25fps（推理前置地基）
+
+**动机**：深蹲底部停留 100–200ms，15fps 下底部只有 1–3 帧，一旦被 `MIN_KPT_CONF<0.05` 或几何过滤 `dist_ha<30px` 拒帧，`_min_angle_in_rep` 永远看不到真实底部。
+
+**改动**：
+- `cloud_rtmpose_client.py:159` `CLOUD_TARGET_FPS` 默认 15 → 25
+- `local_yolo_pose.py:63` `_INFER_CACHE_TTL` 默认 33ms → 25ms，新增 `LOCAL_POSE_CACHE_TTL` 环境变量覆盖
+- `main_claw_loop.py` FSM 轮询间隔 `asyncio.sleep(0.05)` → `asyncio.sleep(0.03)`，新增 `FSM_POLL_INTERVAL` 环境变量
+
+**回退**：三项全部走环境变量。NPU 吃紧就 `export CLOUD_TARGET_FPS=15 LOCAL_POSE_CACHE_TTL=0.033 FSM_POLL_INTERVAL=0.05`。
+
+### 3) FSM 底部/顶峰外插补偿
+
+**问题**：即便帧率提升，置信度/几何过滤还是会拒掉恰好处于底部的那一帧。
+
+**对策**：在 `SquatStateMachine`/`DumbbellCurlFSM` 中记录 `(last_valid_angle, last_ang_vel, last_ts)`，当 DESCENDING/CURLING 态两帧间隔 ∈ (80ms, 250ms) 且之前角速度 < -8°/s（显著下落/收紧），用 `last_angle + last_vel * (dt/2)` 外插"假定帧"并一起参与 `min()` 比较。物理下限钳位：深蹲 40°，弯举 25°。rep 结算后清空追踪器避免串链。
+
+**代码位**：`main_claw_loop.py` 两个 FSM 的 `__init__` + `update` 方法（深蹲 DESCENDING，弯举 CURLING）。
+
+### 4) 三类 EMG UDP 模拟器（深蹲 + 弯举双脚本）
+
+**目的**：没有 ESP32 传感器时，仍能端到端验证 CompensationGRU 对三类代偿模式的分类能力。
+
+**两个脚本（架构一致，数据源不同）**：
+- `tools/simulate_emg_from_mia.py`：深蹲，读取 MIA 预处理 CSV 波形池 `data/mia/squat/{golden,bad}/`，以 phase 桶（20 档）索引重采样
+- `tools/simulate_emg_from_bicep.py`：弯举，解析式波形表（MIA 不含弯举），三类手工编码锚点
+
+**共享机制**：
+- 读实时角度：优先 `/dev/shm/fsm_state.json` (FSM 已平滑) → 回退 `/dev/shm/pose_data.json` 直接算
+- 角度 → phase 映射：深蹲 175°/60°，弯举 170°/40°
+- 合成 ASCII UDP 包 `"target_raw comp_raw\n"` → udp_emg_server 原生协议，DSP 流水线不改
+- **MVC 自动配合**：100Hz 轮询 `/dev/shm/mvc_calibrate.request`，检测到即进入 3.5s 最大发力模式（target≈95%, comp≈90%），让 udp_emg_server 的 3s 峰值采集窗口抓到正确的 MVC 基线
+- `user_profile.exercise` 自动写入对应值，保证 udp_emg_server 把 EMG 路由到正确的前端肌群 key
+
+**三类标签波形差异**：
+| 标签 | 深蹲（MIA） | 弯举（解析式） |
+|-----|-------|-------|
+| standard | golden 原样抽样 | biceps 平滑上升至 78%，comp 稳态 13% |
+| non_standard | golden × 0.3–0.5 | target < 30%，comp 持续 10% |
+| compensating | target × 0.5, comp × 2.0 + 起身尖峰 65–85% | 起始 phase 0.1–0.4 comp 尖峰至 78%，target 被动低 |
+
+**同源脚本**：`tools/vision_rate_probe.py` 只读 probe，测 5s 窗口视觉更新 Hz + 最大两帧间隙，用于步骤 2 帧率改动的量化验收。
+
+### 5) Python 3.7 兼容
+
+全部新增/修改代码避免 `X | None`、`:=`、`match/case`、`pandas`，通过 `ast.parse` 校验，在 WSL 本地 smoke test 均通过。

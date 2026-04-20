@@ -1726,9 +1726,9 @@
 
                 <!-- TAB 3: Data -->
                 <div class="tab-panel" id="tab-data">
-                    <a href="/database" target="_blank" style="display:block; padding:10px 14px; margin-bottom:12px; border:1px solid var(--accent, #5ec8ff); border-radius:6px; text-decoration:none; color:var(--accent, #5ec8ff); font-size:0.85em; background:rgba(94,200,255,0.06);">
+                    <a href="/database?seed=seed" target="_blank" style="display:block; padding:10px 14px; margin-bottom:12px; border:1px solid var(--accent, #5ec8ff); border-radius:6px; text-decoration:none; color:var(--accent, #5ec8ff); font-size:0.85em; background:rgba(94,200,255,0.06);">
                         &#128202; 打开一站式数据库可视化 &rarr;
-                        <span style="display:block; font-size:0.78em; color:var(--text-dim); margin-top:3px;">8 张表 · 标签页切换 · 动作/种子筛选</span>
+                        <span style="display:block; font-size:0.78em; color:var(--text-dim); margin-top:3px;">9 张表 · 标签页切换 · 动作/种子筛选</span>
                     </a>
                     <div class="section-title">&#128193; 训练数据</div>
                     <div class="data-tree" id="dataTree">
@@ -2256,32 +2256,64 @@ async function resetSession() {
 }
 
 var deepseekTimeoutId = null;
+// V7.20 (2026-04-20): 修复"总是显示耗时或超时"bug —— 原代码 await fetch 后无论成功失败
+// 都启动 45s 定时器且从不 clear, catch(e){} 还吞掉了真实错误。新版正确处理 resp + error + timeout。
 async function triggerDeepseek() {
     const btn = document.getElementById('btnSumm');
+    const chatArea = document.getElementById('chatArea');
+    const restoreBtn = function() {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#128221; 生成点评'; btn.style.opacity = '1'; }
+    };
     btn.disabled = true;
     btn.textContent = '生成并发送战报...';
     btn.style.opacity = '0.6';
-    document.getElementById('chatArea').innerHTML =
+    if (chatArea) chatArea.innerHTML =
         '<div class="chat-placeholder" style="animation:blink 1.5s infinite;">等待智能认知枢纽下发战报并推向飞书...</div>';
-    try { 
-        await fetch('/api/feishu/push', { 
+
+    // AbortController 实现真正的客户端超时
+    var ctrl = new AbortController();
+    if (deepseekTimeoutId) clearTimeout(deepseekTimeoutId);
+    deepseekTimeoutId = setTimeout(function() { ctrl.abort(); }, 60000);  // 客户端 60s 兜底
+
+    var t0 = Date.now();
+    try {
+        var res = await fetch('/api/feishu/push', {
             method: 'POST',
             headers: {'Content-Type':'application/json'},
-            body: JSON.stringify({'type': 'summary'}) 
-        }); 
-    } catch(e) {}
-    if (deepseekTimeoutId) clearTimeout(deepseekTimeoutId);
-    deepseekTimeoutId = setTimeout(function() {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = '&#128221; 生成点评';
-            btn.style.opacity = '1';
+            body: JSON.stringify({'type': 'summary'}),
+            signal: ctrl.signal,
+        });
+        clearTimeout(deepseekTimeoutId); deepseekTimeoutId = null;
+        var elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        var data = null;
+        try { data = await res.json(); } catch(e) { data = null; }
+        if (res.ok && data && data.ok) {
+            var planText = (data.plan || '').toString();
+            var banner;
+            if (data.degraded) {
+                // V7.21: DeepSeek 失败但飞书送达了降级模板
+                banner = '<div style="color:var(--accent-amber);font-size:0.85em;margin-bottom:8px;">⚠️ 飞书已送达（AI 降级）· 总耗时 ' + elapsed + 's' +
+                         (data.ds_error ? ' · DS错误: ' + String(data.ds_error).slice(0,40) : '') + '</div>';
+            } else {
+                banner = '<div style="color:var(--accent-green);font-size:0.85em;margin-bottom:8px;">✅ 飞书已送达 · 耗时 ' + elapsed + 's' +
+                         (typeof data.elapsed_s === 'number' ? ' (DeepSeek ' + data.elapsed_s + 's)' : '') + '</div>';
+            }
+            if (chatArea) chatArea.innerHTML = banner +
+                '<div style="white-space:pre-wrap;color:var(--text-base);">' + planText.replace(/</g,'&lt;') + '</div>';
+        } else {
+            var err = (data && (data.error || data.detail)) || ('HTTP ' + res.status);
+            if (chatArea) chatArea.innerHTML =
+                '<div class="chat-placeholder" style="color:var(--accent-red);">❌ 飞书推送失败 · ' + String(err) + ' · ' + elapsed + 's</div>';
         }
-        var chatArea = document.getElementById('chatArea');
+    } catch(e) {
+        clearTimeout(deepseekTimeoutId); deepseekTimeoutId = null;
+        var elapsed2 = ((Date.now() - t0) / 1000).toFixed(1);
+        var msg = (e && e.name === 'AbortError') ? '客户端 60s 超时' : (e && e.message ? e.message : '网络异常');
         if (chatArea) chatArea.innerHTML =
-            '<div class="chat-placeholder" style="color:var(--accent-amber);">飞书推送请求耗时或超时，请检查后端和网络</div>';
-        deepseekTimeoutId = null;
-    }, 45000); // 维持原本的超时补偿保护
+            '<div class="chat-placeholder" style="color:var(--accent-amber);">⚠️ 飞书链路异常 · ' + msg + ' · ' + elapsed2 + 's · 请检查 /api/feishu/ping</div>';
+    } finally {
+        restoreBtn();
+    }
 }
 
 // ===== Profile (removed in V4.5 UI overhaul; submitProfileModal kept for legacy modal) =====

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 BOARD_KEY="$HOME/.ssh/id_rsa_toybrick"
-TARGET="toybrick@10.105.245.224"
+TARGET="toybrick@10.18.76.224"
 
 echo "============================================"
 echo "  IronBuddy 停止数据采集"

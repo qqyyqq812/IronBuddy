@@ -1,0 +1,16 @@
+{
+  "curl": {
+    "mdf_mean_hz": null,
+    "mdf_std_hz": null,
+    "mnf_mean_hz": null,
+    "mnf_std_hz": null,
+    "rms_norm_p50": null,
+    "rms_norm_p95": null,
+    "snr_p95": null,
+    "n_samples": 0,
+    "source": "hsbi_not_downloaded"
+  },
+  "generated_at": "2026-04-18T01:30:54.811470+00:00",
+  "protocol_note": "HSBI is isometric-only; for dynamic curl baseline use FLEX once available. L3 use only (flex-curl-only-pivot §1.6): do NOT use for encoder pretraining or transfer learning. Baselines feed J1/J2 judgment thresholds and noise augmentation only.",
+  "status": "empty"
+}

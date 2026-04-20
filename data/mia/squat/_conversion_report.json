@@ -1,0 +1,31 @@
+{
+  "mia_root": "/home/qq/projects/embedded-fullstack/data/mia_squat_raw/MIADatasetOfficial",
+  "out_root": "/home/qq/projects/embedded-fullstack/data/mia/squat",
+  "num_clip_dirs": 964,
+  "num_reps_total": 964,
+  "label_counts": {
+    "golden": 761,
+    "bad": 203
+  },
+  "skip_reasons": {},
+  "elapsed_sec": 0.54,
+  "params": {
+    "fps": 30.0,
+    "rep_min_duration": 1.0,
+    "rep_max_duration": 4.0,
+    "max_reps_per_clip": 5,
+    "rms_window_ms": 100.0
+  },
+  "csv_header": [
+    "Timestamp",
+    "Ang_Vel",
+    "Angle",
+    "Ang_Accel",
+    "Target_RMS",
+    "Comp_RMS",
+    "Symmetry_Score",
+    "Phase_Progress",
+    "pose_score",
+    "label"
+  ]
+}

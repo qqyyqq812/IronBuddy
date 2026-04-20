@@ -15,6 +15,7 @@ Compatible with Python 3.7+ (no walrus operator, no X|None syntax).
 """
 
 import math
+import os
 import numpy as np
 import cv2
 
@@ -26,7 +27,7 @@ except ImportError:
 
 
 # ── Model constants ───────────────────────────────────────────────────────────
-INPUT_SIZE = 640
+INPUT_SIZE = int(os.environ.get("LOCAL_POSE_INPUT", "640"))
 NUM_KPT = 17
 NUM_CLASS = 1
 NUM_ANCHOR = 3
@@ -55,6 +56,11 @@ SKELETON = [
     [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
     [2, 4], [3, 5], [4, 6], [5, 7],
 ]
+
+
+import time as _time
+_INFER_CACHE = {"t": 0.0, "kpts": None}
+_INFER_CACHE_TTL = float(os.environ.get("LOCAL_POSE_CACHE_TTL", "0.025"))  # 25ms — ~40fps cap, cheap NPU reuse
 
 
 def _sigmoid(x):
@@ -134,6 +140,11 @@ def _decode_head(output, anchors, stride, conf_thresh):
                 kpts.append([kx, ky, kc])
 
             results.append((score, [x1, y1, x2, y2], kpts))
+
+    # V4.8 NPU accel: cap per-head detections to top-K before NMS
+    if len(results) > 10:
+        results.sort(key=lambda x: x[0], reverse=True)
+        results = results[:10]
 
     return results
 
@@ -243,6 +254,11 @@ class LocalYoloPose(object):
         if not self._try_init():
             return [[0.0, 0.0, 0.0]] * NUM_KPT
 
+        # V4.8 NPU accel: if recent result exists, reuse it (30fps cap)
+        _now = _time.time()
+        if _INFER_CACHE["kpts"] is not None and (_now - _INFER_CACHE["t"]) < _INFER_CACHE_TTL:
+            return _INFER_CACHE["kpts"]
+
         orig_h, orig_w = frame.shape[:2]
 
         # Letterbox
@@ -273,7 +289,10 @@ class LocalYoloPose(object):
         kept = _nms(all_dets, self._nms_thresh)
 
         if not kept:
-            return [[0.0, 0.0, 0.0]] * NUM_KPT
+            _no_person = [[0.0, 0.0, 0.0]] * NUM_KPT
+            _INFER_CACHE["t"] = _now
+            _INFER_CACHE["kpts"] = _no_person
+            return _no_person
 
         # Pick best detection
         best = max(kept, key=lambda d: d[0])
@@ -289,6 +308,8 @@ class LocalYoloPose(object):
             orig_y = max(0.0, min(float(orig_h), orig_y))
             result.append([orig_x, orig_y, kc])
 
+        _INFER_CACHE["t"] = _now
+        _INFER_CACHE["kpts"] = result
         return result
 
     def infer_multi(self, frame):

@@ -511,13 +511,14 @@ class SpeechManager(object):
         # M6 (V7.13, 2026-04-20): 警报播报可被教练/对话状态掐断
         # - voice_interrupt 文件 (FSM / UI / 主循环写入)
         # - _dialog_active 被 set (主循环喊"教练"命中后立即 set)
-        # 非 ALARM 档保持原行为 (不可打断)
-        _alarm = (prio == PRIO_ALARM)
+        # V7.26 (2026-04-21): 扩展到 PRIO_LLM 档 — LLM 长回复播报期间 UI 或外部可主动写 voice_interrupt 掐断
+        #                      打断后清空 LLM 队列, 避免后续堆积 TTS 继续播; 留给主循环重新接受 "教练" 唤醒
+        _interruptible = (prio in (PRIO_ALARM, PRIO_LLM))
         while p.poll() is None:
-            if _alarm:
+            if _interruptible:
                 try:
                     if os.path.exists("/dev/shm/voice_interrupt"):
-                        logging.info(u"[M6] ALARM 被 voice_interrupt 掐断")
+                        logging.info(u"[V7.26] prio=%d 被 voice_interrupt 掐断", prio)
                         try:
                             p.terminate()
                         except Exception:
@@ -527,12 +528,20 @@ class SpeechManager(object):
                                            stderr=subprocess.DEVNULL, timeout=1)
                         except Exception:
                             pass
+                        # V7.26: LLM 档掐断后清空后续队列, 防止下一条 TTS 继续跑
+                        if prio == PRIO_LLM:
+                            try:
+                                with self._lock:
+                                    self._buckets[PRIO_LLM] = []
+                            except Exception:
+                                pass
                         try:
                             os.remove("/dev/shm/voice_interrupt")
                         except OSError:
                             pass
                         break
-                    if _dialog_active.is_set():
+                    # _dialog_active 仅对 ALARM 档起作用 (主循环喊"教练"命中)
+                    if prio == PRIO_ALARM and _dialog_active.is_set():
                         logging.info(u"[M6] ALARM 撞上对话状态, 立即掐断")
                         try:
                             p.terminate()
@@ -674,6 +683,9 @@ def text2sound(client, text, file_path="/tmp/voice_tts.wav"):
 
 def play_audio(file_path="/tmp/voice_tts.wav", allow_interrupt=True):
     # type: (str, bool) -> None
+    # V7.24 (2026-04-21): 撤掉 V7.23 引入的 /dev/shm/voice_speaking 文件信号 —
+    # SpeechManager._worker 不经过 play_audio, 导致信号残留永久卡死主循环 L1300.
+    # 正确互斥通道是进程内 _mic_allowed Event (主循环 L1294 wait, SpeechManager 入队 clear).
     global _play_proc
     if not os.path.exists(file_path):
         return
@@ -977,7 +989,11 @@ def main():
     #   - chat_active 残留 -> hard_alarm_worker 永远 skip (用户感觉"长期没反应")
     #   - voice_interrupt 残留 -> 启动第一段 TTS 被立刻掐断
     #   - mute_signal 残留 muted=true -> 整个语音静默
-    _m10_voice_cleanup = ["/dev/shm/chat_active", "/dev/shm/voice_interrupt"]
+    # V7.24 (2026-04-21): 新增 voice_speaking 清理 —
+    #   - V7.23 曾引入 /dev/shm/voice_speaking 作为 TTS 互斥信号, 但 SpeechManager 不走 play_audio
+    #     导致 watcher touch 后从未 delete, 残留永久卡死主循环 L1300
+    #   - 本次撤掉该信号 (V7.24), 但仍保留启动清理以覆盖任何历史残留 (含跨版本升级场景)
+    _m10_voice_cleanup = ["/dev/shm/chat_active", "/dev/shm/voice_interrupt", "/dev/shm/voice_speaking"]
     _v_cleaned = 0
     for _f in _m10_voice_cleanup:
         try:
@@ -1279,6 +1295,13 @@ def main():
         # V5.0 PTT \u534a\u53cc\u5de5: \u58f0\u7b52\u6b63\u5728\u64ad\u65f6\u963b\u585e,\u907f\u514d VAD \u6536\u5230\u6f0f\u97f3
         _mic_allowed.wait()
 
+        # V7.22 (2026-04-21): LLM API \u8c03\u7528\u671f\u95f4\u7981\u9ea6 \u2014 \u7528\u6237\u5728\u8fd9\u671f\u95f4\u8bf4\u4efb\u4f55\u8bdd\u90fd\u4e0d\u5e94\u88ab\u5f55
+        # V7.24 (2026-04-21): \u64a4\u9500 V7.23 \u7684 voice_speaking \u6587\u4ef6\u4fe1\u53f7 \u2014 \u5b83\u65e0\u4eba\u6e05\u7406\u4f1a\u6b8b\u7559\u6b7b\u9501\u4e3b\u5faa\u73af
+        # \u771f\u6b63\u7684 TTS \u671f\u95f4\u4e92\u65a5\u7531\u4e0a\u884c L1294 _mic_allowed.wait() \u5b8c\u6210 (\u8fdb\u7a0b\u5185 Event, \u8fdb\u7a0b\u5d29\u6e83\u81ea\u52a8\u91ca\u653e)
+        if os.path.exists("/dev/shm/llm_inflight"):
+            time.sleep(0.2)
+            continue
+
         # === V7.2 \u5355\u8f6e\u5bf9\u8bdd: \u5589\u4e00\u6b21\u6559\u7ec3 = \u4e00\u6b21\u56de\u7b54 = \u56de SLEEP ===
         output_debug(0, u"\u5f85\u673a\u4e2d..." if not _is_muted[0] else u"\u9759\u97f3\u5f85\u673a...")
         status = record_with_vad(timeout=WAKE_TIMEOUT)
@@ -1289,6 +1312,11 @@ def main():
         if not text:
             continue
         output_debug(0, text)
+
+        # V7.22 race guard: \u5f55\u97f3\u671f\u95f4 LLM \u542f\u52a8\u4e86 \u2192 \u6b7b\u4e22\u7ed3\u679c, \u4e0d\u8d70\u5524\u9192/\u8def\u7531
+        if os.path.exists("/dev/shm/llm_inflight"):
+            logging.info(u"[V7.22] \u4e22\u5f03 LLM API \u671f\u95f4\u7684\u8bef\u5f55: %s", text[:40])
+            continue
 
         # V7.3 \u65e0\u9700\u5524\u9192\u7684\u7d27\u6025\u547d\u4ee4: "\u89e3\u9664\u9759\u97f3"\u7c7b\u76f4\u63a5\u89e6\u53d1
         # \u8fd9\u662f\u552f\u4e00\u65e0\u9700\u5589"\u6559\u7ec3"\u7684\u672c\u5730\u547d\u4ee4
@@ -1597,8 +1625,20 @@ def _dedup_ok(cache, text, ttl=30.0):
 
 
 def _mic_allowed_watchdog():
-    """V7.8 \u9632\u6b7b\u9501: \u5982\u679c _mic_allowed \u6301\u7eed clear \u8d85\u8fc7 15s (\u6b63\u5e38 TTS \u4e0d\u5e94\u8d85 10s),
-    \u5f3a\u5236 set \u9632\u6b63\u7528\u6237\u5589\u6559\u7ec3\u65e0\u54cd\u5e94\u3002"""
+    """V7.26 (2026-04-21) \u9632\u6b7b\u9501 (\u5168\u91cd\u8bbe):
+
+    \u5386\u53f2\u6559\u8bad:
+      - V7.8  \u539f\u59cb 15s \u5151\u5e95
+      - V7.24 15s \u2192 3s  \u2192 \u8bef\u6740\u6b63\u5e38\u957f\u53e5 TTS ("\u51c6\u5907\u597d\u540e\u8bf7\u8bf4\u5f00\u59cb MVC \u6d4b\u8bd5" \u79d2 \u2248 3s)
+      - V7.25 3s  \u2192 6s  \u2192 LLM \u957f\u56de\u590d (~8s) \u4ecd\u4f1a\u8e29\u96f7
+                           \u2192 watchdog \u63d0\u524d\u91ca\u653e \u2192 \u9ea6\u514b\u98ce\u5f55\u5165 aplay \u6269\u58f0\u5668\u56de\u58f0
+                           \u2192 baseline \u6c61\u67d3\u4e3a 662 \u2192 threshold 702 \u2192 \u7528\u6237\u559a "\u6559\u7ec3" rms \u2248 650 \u8fbe\u4e0d\u5230 \u2192 \u5361 30s
+
+    V7.26 \u6839\u6cbb\u4e09\u7bc7:
+      (B) \u667a\u80fd\u5224\u5b9a: aplay \u8fd8\u5728\u6b63\u5e38\u8dd1 \u2192 \u4e0d\u7b97\u5361\u6b7b, \u4e0d\u8ba1\u65f6
+      (A) \u5f3a\u5236\u91ca\u653e\u524d: kill aplay \u6d88\u9664\u56de\u58f0\u6e90 + \u4f5c\u5e9f VAD baseline \u7f13\u5b58
+      \u77e9: \u5151\u5e95\u9608\u503c\u56de\u8c03\u5230 12s (\u8986\u76d6 \u2248 99% LLM \u957f\u53e5 TTS; \u8fd9\u79cd\u6781\u7aef\u60c5\u51b5\u4e0b\u624d\u5151\u5e95)
+    """
     _blocked_since = [0.0]
     while True:
         time.sleep(1.0)
@@ -1606,11 +1646,36 @@ def _mic_allowed_watchdog():
             if _mic_allowed.is_set():
                 _blocked_since[0] = 0
                 continue
+
+            # V7.26 (B): aplay \u5728\u8dd1\u5c31\u4e0d\u7b97\u5361\u6b7b \u2014 SpeechManager \u6b63\u5728\u64ad\u62a5\u662f\u5408\u7406\u963b\u585e
+            try:
+                _p = _sm._play_proc[0]
+                if _p is not None and _p.poll() is None:
+                    # aplay \u8fd8\u6d3b, \u91cd\u7f6e\u8ba1\u65f6\u5668 \u2014 \u7b49\u5b83\u6b63\u5e38\u7ed3\u675f
+                    _blocked_since[0] = 0
+                    continue
+            except Exception:
+                pass
+
             if _blocked_since[0] == 0:
                 _blocked_since[0] = time.time()
                 continue
-            if time.time() - _blocked_since[0] > 15.0:
-                logging.warning(u"[mic_watchdog] \u9ea6\u98ce\u95e8\u6301\u7eed\u963b\u585e >15s, \u5f3a\u5236\u91ca\u653e")
+
+            # \u5151\u5e95\u9608\u503c 12s \u2014 aplay \u5df2\u6b7b\u4f46 _mic_allowed \u4ecd clear \u8d85\u8fc7 12s, \u771f\u6b63\u5361\u6b7b
+            if time.time() - _blocked_since[0] > 12.0:
+                logging.warning(u"[mic_watchdog] \u9ea6\u98ce\u95e8\u6301\u7eed\u963b\u585e >12s \u4e14 aplay \u5df2\u6b7b, \u5f3a\u5236\u91ca\u653e")
+                # V7.26 (A): kill \u6b8b\u7559 aplay (\u9632\u4e07\u4e00) + \u4f5c\u5e9f baseline \u7f13\u5b58
+                try:
+                    subprocess.run(["killall", "-9", "aplay"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1)
+                except Exception:
+                    pass
+                try:
+                    _VAD_BASELINE_CACHE["ts"] = 0.0  # \u4e0b\u6b21 record_with_vad \u5fc5\u91cd\u91c7 baseline
+                    _VAD_BASELINE_CACHE["baseline"] = 0.0
+                    logging.info(u"[mic_watchdog] VAD baseline \u7f13\u5b58\u5df2\u4f5c\u5e9f, \u9632\u6269\u58f0\u5668\u56de\u58f0\u6c61\u67d3")
+                except Exception:
+                    pass
                 try:
                     _sm._play_proc[0] = None
                     _sm._current_prio[0] = 99
@@ -1682,8 +1747,20 @@ def _llm_reply_watcher():
             with open(path, "r", encoding="utf-8") as f:
                 txt = f.read().strip()
             if txt and _dedup_ok(_dedup_cache, txt):
+                # V7.23: \u9884\u5360\u9ea6\u514b\u98ce\u95e8, \u5173\u95ed watcher\u2192SpeechManager \u4e4b\u95f4\u7684\u7ade\u6001\u7a97\u53e3
+                # \u6839\u6cbb\u8bed\u97f3\u957f\u5f55\u97f3 bug: \u4e0d\u7b49 SpeechManager \u5408\u6210\u5b8c TTS, \u7acb\u5373\u963b\u585e\u4e3b\u5faa\u73af L1294 _mic_allowed.wait()
+                # V7.24: \u64a4\u6389 /dev/shm/voice_speaking \u6587\u4ef6 touch \u2014 SpeechManager \u4e0d\u8d70 play_audio, \u4fe1\u53f7\u65e0\u4eba\u6e05\u7406\u4f1a\u6b8b\u7559\u6b7b\u9501\u4e3b\u5faa\u73af
+                _mic_allowed.clear()
                 logging.info(u"[LLM_Watcher] \u65b0 llm_reply (len=%d): %s", len(txt), txt[:60])
                 _speak_llm(txt)
+                # V7.21 (2026-04-21): \u75b2\u52b3/\u624b\u52a8\u89e6\u53d1 LLM \u64ad\u62a5\u540e, \u5fc5\u987b\u6389\u65ad SLEEP \u6001\u4e0b
+                # \u6b63\u5728\u8d77\u98de\u7684 record_with_vad, \u5426\u5219 TTS \u6cc4\u9732\u4f1a\u62c9\u957f VAD "\u5076\u9047\u5f55\u97f3"\u5e7b\u89c9.
+                # \u5bf9\u9f50 M11 wake \u8def\u5f84\u7684\u5904\u7406, \u4fdd\u8bc1\u64ad\u5b8c\u81ea\u52a8\u56de SLEEP \u7b49"\u6559\u7ec3".
+                try:
+                    subprocess.run(["killall", "-9", "arecord"],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except Exception:
+                    pass
             elif txt:
                 logging.info(u"[LLM_Watcher] \u91cd\u590d\u5185\u5bb9\u5e72\u901f\u4e22\u5f03: %s", txt[:40])
         except Exception as e:
@@ -2083,12 +2160,19 @@ def _try_voice_command(client, text):
                     "http://127.0.0.1:5000/api/feishu/push",
                     data=payload,
                     headers={"Content-Type": "application/json"})
-                resp = urllib.request.urlopen(req, timeout=40)
+                # V7.21 (2026-04-21): timeout 40→90s —— 后端最坏 DeepSeek 20+token 8+msg 15 = 43s,
+                # 加上 Nexus SQLite 查询峰值可再多 10s, 40s 死线必炸 → "服务器忙碌"假失败
+                resp = urllib.request.urlopen(req, timeout=90)
                 result = json.loads(resp.read().decode())
                 if result.get("ok"):
-                    speak(client, "飞书投递已完成！", allow_interrupt=False)
+                    _elapsed = result.get("elapsed_s")
+                    _degraded = result.get("degraded", False)
+                    if _degraded:
+                        speak(client, "飞书已投递简报，AI 点评暂不可用", allow_interrupt=False)
+                    else:
+                        speak(client, "飞书投递已完成！", allow_interrupt=False)
                 else:
-                    speak(client, "推送失败: %s" % result.get("error", "未知错误")[:20], allow_interrupt=False)
+                    speak(client, "推送失败: %s" % str(result.get("error", "未知错误"))[:20], allow_interrupt=False)
             else:
                 # Python 2 fallback
                 import urllib2
@@ -2096,11 +2180,16 @@ def _try_voice_command(client, text):
                     "http://127.0.0.1:5000/api/feishu/push",
                     data=payload,
                     headers={"Content-Type": "application/json"})
-                resp = urllib2.urlopen(req, timeout=40)
+                resp = urllib2.urlopen(req, timeout=90)
                 speak(client, "飞书投递已完成！", allow_interrupt=False)
         except Exception as e:
             logging.error("飞书推送异常: %s", e)
-            speak(client, "服务器似乎忙碌，推送出错", allow_interrupt=False)
+            # V7.21: 区分超时 vs 其他异常, 不再笼统说"服务器忙碌"
+            _emsg = type(e).__name__
+            if "timeout" in _emsg.lower() or "timed out" in str(e).lower():
+                speak(client, "飞书推送仍在后台进行，请稍后查看群消息", allow_interrupt=False)
+            else:
+                speak(client, "飞书链路异常：%s" % _emsg[:15], allow_interrupt=False)
         return True
 
     # V6.1 \u8bed\u97f3\u5173\u673a \u2014 \u5fc5\u987b\u5148\u64ad\u5b8c"\u518d\u89c1"\u518d\u8c03\u505c\u673a API

@@ -34,11 +34,12 @@ if str(_ENGINE_DIR) not in sys.path:
 st.set_page_config(page_title="IronBuddy 训练面板", layout="wide")
 st.title("IronBuddy GRU 训练可视化面板")
 
-tab1, tab2, tab3, tab4 = st.tabs([
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "1. 数据探索",
     "2. 训练监控",
     "3. 模型评估",
     "4. 实时推理",
+    "5. V4.2 数据浏览",
 ])
 
 FEATURE_COLS = ["Ang_Vel", "Angle", "Ang_Accel", "Target_RMS", "Comp_RMS",
@@ -361,3 +362,201 @@ with tab4:
         st.success(f"监控结束 ({duration}秒)")
     else:
         st.info("点击「开始监控」连接板端实时数据流")
+
+
+# =========================================================================
+# 标签页 5: V4.2 数据浏览（11D 特征 + 三类标签，data/v42/ 目录结构）
+# =========================================================================
+# 新增于 V4.2 训练前置升级（计划 distributed-puzzling-wilkinson.md Agent-A）
+# 只读浏览 data/v42/<user>/<exercise>/<label>/rep_*.csv，不动旧 Tab 1-4。
+_V42_FEATURE_COLS = [
+    "Ang_Vel", "Angle", "Ang_Accel",
+    "Target_RMS_Norm", "Comp_RMS_Norm", "Symmetry_Score", "Phase_Progress",
+    "Target_MDF", "Target_MNF", "Target_ZCR", "Target_Raw_Unfilt",
+]
+_V42_FEAT_CN = {
+    "Ang_Vel": "角速度", "Angle": "关节角度", "Ang_Accel": "角加速度",
+    "Target_RMS_Norm": "目标肌肉归一化RMS", "Comp_RMS_Norm": "代偿肌肉归一化RMS",
+    "Symmetry_Score": "对称性", "Phase_Progress": "动作阶段",
+    "Target_MDF": "中位频率(Hz/100)", "Target_MNF": "均值频率(Hz/150)",
+    "Target_ZCR": "过零率(/400)", "Target_Raw_Unfilt": "原始未滤(/2048)",
+}
+_V42_LABEL_INT2STR = {0: "standard", 1: "compensation", 2: "bad_form"}
+_V42_LABEL_CN = {
+    "standard": "标准", "compensation": "代偿", "bad_form": "错误",
+}
+_V42_COLORS = {
+    "standard": "#22c55e",
+    "compensation": "#f59e0b",
+    "bad_form": "#ef4444",
+}
+
+
+def _load_v42_reps(root_dir, user_sel, exercise_sel, label_sel):
+    """
+    扫描 data/v42/<user>/<ex>/<label>/rep_*.csv，拼成一个 rep-level DataFrame。
+    每 rep 一行：user / exercise / label / rep_id / 文件路径 + 11 个特征的聚合统计。
+    返回 (per_rep_df, per_frame_df)，per_frame_df 用于小提琴图。
+    """
+    rows_rep = []
+    rows_frame = []
+    user_dirs = sorted(glob.glob(os.path.join(root_dir, "user_*")))
+    for ud in user_dirs:
+        user = Path(ud).name
+        if user_sel != "all" and user_sel != user:
+            continue
+        exercises = ["curl", "squat"] if exercise_sel == "both" else [exercise_sel]
+        for ex in exercises:
+            labels = ["standard", "compensation", "bad_form"] \
+                if label_sel == "all" else [label_sel]
+            for lb in labels:
+                pattern = os.path.join(ud, ex, lb, "rep_*.csv")
+                for csv_path in sorted(glob.glob(pattern)):
+                    try:
+                        df = pd.read_csv(csv_path)
+                    except Exception:
+                        continue
+                    if df.empty:
+                        continue
+                    rep_id = Path(csv_path).stem
+                    rows_rep.append({
+                        "user": user, "exercise": ex, "label": lb,
+                        "rep_id": rep_id, "rows": len(df),
+                        "path": csv_path,
+                    })
+                    # 逐帧摘要（下采样：如果 > 200 行则取前 200）
+                    frame_df = df.head(200).copy()
+                    frame_df["user"] = user
+                    frame_df["exercise"] = ex
+                    frame_df["label_str"] = lb
+                    frame_df["rep_id"] = rep_id
+                    rows_frame.append(frame_df)
+
+    if not rows_rep:
+        return pd.DataFrame(), pd.DataFrame()
+    per_rep = pd.DataFrame(rows_rep)
+    per_frame = pd.concat(rows_frame, ignore_index=True)
+    return per_rep, per_frame
+
+
+with tab5:
+    st.header("V4.2 数据浏览（11D + 三类标签）")
+    st.caption(
+        "扫描 `data/v42/<user>/<exercise>/<label>/rep_*.csv`，"
+        "按 user / exercise / label 过滤，查看 11 维特征小提琴分布与 rep 级计数。"
+    )
+
+    v42_root = str(_PROJECT / "data" / "v42")
+    v42_root_input = st.text_input(
+        "V4.2 数据根目录", value=v42_root, key="v42_root",
+        help="包含 user_* 子目录的根，由 tools/collect_training_data_v42.py 写入",
+    )
+
+    if not os.path.isdir(v42_root_input):
+        st.info(
+            "未检测到 V4.2 数据集。请先运行 "
+            "`python tools/collect_training_data_v42.py --user user_01 ...` "
+            "采集数据。"
+        )
+    else:
+        # 发现可选用户
+        available_users = sorted([
+            Path(d).name for d in glob.glob(os.path.join(v42_root_input, "user_*"))
+            if os.path.isdir(d)
+        ])
+        if not available_users:
+            st.info("data/v42/ 目录存在，但未找到 user_* 子目录。")
+        else:
+            sb1, sb2, sb3 = st.columns(3)
+            with sb1:
+                user_sel = st.selectbox(
+                    "用户", ["all"] + available_users, key="v42_user",
+                )
+            with sb2:
+                exercise_sel = st.selectbox(
+                    "动作", ["both", "curl", "squat"], key="v42_exercise",
+                )
+            with sb3:
+                label_sel = st.selectbox(
+                    "标签", ["all", "standard", "compensation", "bad_form"],
+                    key="v42_label",
+                )
+
+            per_rep, per_frame = _load_v42_reps(
+                v42_root_input, user_sel, exercise_sel, label_sel,
+            )
+
+            if per_rep.empty:
+                st.warning("过滤条件下没有匹配的 rep。")
+            else:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("rep 总数", f"{len(per_rep):,}")
+                m2.metric("帧总数", f"{len(per_frame):,}")
+                m3.metric("用户数", per_rep["user"].nunique())
+
+                left, right = st.columns([3, 2])
+
+                with left:
+                    st.subheader("11 维特征分布（按 label 分色）")
+                    st.caption(
+                        "小提琴图展示三类标签的特征分布差异 —"
+                        "差异越显著越利于 DualBranch 融合头区分。"
+                    )
+                    for feat in _V42_FEATURE_COLS:
+                        if feat not in per_frame.columns:
+                            continue
+                        fig = px.violin(
+                            per_frame, y=feat, x="label_str",
+                            color="label_str",
+                            color_discrete_map=_V42_COLORS,
+                            box=True, points=False,
+                            labels={
+                                feat: _V42_FEAT_CN.get(feat, feat),
+                                "label_str": "标签",
+                            },
+                            category_orders={
+                                "label_str": ["standard", "compensation", "bad_form"],
+                            },
+                        )
+                        fig.update_layout(
+                            height=280,
+                            margin=dict(l=10, r=10, t=30, b=10),
+                            showlegend=False,
+                            title=_V42_FEAT_CN.get(feat, feat),
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+
+                with right:
+                    st.subheader("rep 级计数（user × exercise × label）")
+                    pivot = per_rep.pivot_table(
+                        index=["user", "exercise"],
+                        columns="label",
+                        values="rep_id",
+                        aggfunc="count",
+                        fill_value=0,
+                    )
+                    st.dataframe(pivot, use_container_width=True)
+
+                    st.subheader("类别分布")
+                    label_counts = per_rep["label"].value_counts().reset_index()
+                    label_counts.columns = ["label", "count"]
+                    label_counts["label_cn"] = label_counts["label"].map(
+                        _V42_LABEL_CN).fillna(label_counts["label"])
+                    pie = px.pie(
+                        label_counts, names="label_cn", values="count",
+                        color="label", color_discrete_map=_V42_COLORS,
+                    )
+                    pie.update_layout(
+                        height=300,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                    )
+                    st.plotly_chart(pie, use_container_width=True)
+
+                with st.expander("原始 CSV 预览（前 3 个 rep × 前 10 行）"):
+                    preview_paths = per_rep["path"].head(3).tolist()
+                    for pth in preview_paths:
+                        st.markdown("**{0}**".format(pth))
+                        try:
+                            st.dataframe(pd.read_csv(pth).head(10))
+                        except Exception as e:
+                            st.warning("读取失败：{0}".format(e))
