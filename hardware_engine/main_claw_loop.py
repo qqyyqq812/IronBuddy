@@ -98,6 +98,10 @@ class SquatStateMachine:
         self._last_valid_ts = 0.0
         self._last_valid_angle_sq = None
         self._last_ang_vel_sq = 0.0  # deg/s, 负值=下落
+        # M8 (V7.14, 2026-04-20): 代偿计数器 + 防重复
+        # GRU 分类 "compensating" 时递增; 同一 rep(_cur_reps) 只计一次
+        self._compensation_count = 0
+        self._compensation_last_rep = -1
 
     def calculate_angle(self, a, b, c):
         try:
@@ -329,6 +333,9 @@ class DumbbellCurlFSM:
         self._last_valid_ts = 0.0
         self._last_valid_angle_cu = None
         self._last_ang_vel_cu = 0.0  # deg/s, 负值=肘关节正在闭合
+        # M8 (V7.14): 弯举动作也要有代偿计数, prompt 统一
+        self._compensation_count = 0
+        self._compensation_last_rep = -1
 
     @property
     def good_squats(self): return self._good_reps
@@ -842,11 +849,20 @@ async def main():
                                              f"分类={cls_cn.get(nn_result['classification'], nn_result['classification'])} "
                                              f"置信度={nn_result['confidence']:.3f}")
                                 # V7.6: GRU 检测到代偿 → 独立警报"代偿"
+                                # M8 (V7.14): 同步递增 _compensation_count 供总结 prompt 使用
+                                #            防重复: 同一 rep 只计一次 (_cur_reps 单调递增)
                                 if nn_result.get("classification") == "compensating":
                                     try:
                                         fsm.trigger_buzzer_alert(kind="代偿")
                                     except Exception:
                                         pass
+                                    try:
+                                        if _cur_reps != fsm._compensation_last_rep:
+                                            fsm._compensation_count += 1
+                                            fsm._compensation_last_rep = _cur_reps
+                                            logging.info(f"📊 [M8] 代偿计数 -> {fsm._compensation_count} (rep={_cur_reps})")
+                                    except Exception as _ce:
+                                        logging.debug(f"[M8] 代偿计数异常: {_ce}")
                             except Exception as _e:
                                 logging.debug(f"[GRU] infer error: {_e}")
 
@@ -1018,17 +1034,27 @@ async def main():
                 logging.info(f"⏳ 触发大模型结组 ({reason}) - (标准:{good_count} 违规:{failed_count})")
 
                 if connected:
-                    # V7.10 精简 prompt: 30字内, 不提疲劳上限, 只点评标准/违规/代偿 + 正负反馈
-                    # 参考同学方案: 短而干脆. 不启用思考模式.
+                    # V7.10 + M8 (V7.14): prompt 必含代偿维度, 并区分三类反馈
+                    #  (a) 全标准 -> 鼓励
+                    #  (b) 有违规半蹲 -> 指出幅度问题
+                    #  (c) 有代偿 -> 指出代偿问题 (腰背/膝内扣等)
+                    # 三类同时出现: 综合点评
                     comp_count = getattr(fsm, '_compensation_count', 0)
-                    is_good = failed_count == 0 and comp_count == 0
-                    data_line = f"标准{good_count}次，不标准{failed_count}次"
-                    if comp_count > 0:
-                        data_line += f"，代偿{comp_count}次"
+                    is_perfect = failed_count == 0 and comp_count == 0
+                    # 统一 data_line 格式, 代偿始终写入 (即使为 0, 也让教练能表扬"无代偿")
+                    data_line = f"标准{good_count}次，不标准{failed_count}次，代偿{comp_count}次"
+                    if is_perfect:
+                        feedback_line = "给出正向鼓励继续保持"
+                    elif comp_count > 0 and failed_count == 0:
+                        feedback_line = "重点提醒代偿问题，注意腰背和膝盖姿态"
+                    elif comp_count == 0 and failed_count > 0:
+                        feedback_line = "提醒下蹲幅度不够，下次蹲到位"
+                    else:
+                        feedback_line = "同时指出幅度不够和代偿问题，下次更认真"
                     short_prompt = (
                         f"你是健身教练。本组{data_line}。"
-                        f"{'给出正向鼓励继续保持' if is_good else '指出问题下次需更认真'}。"
-                        f"要求: 20字内, 一段话, 无标点花哨, 不提疲劳分数。"
+                        f"{feedback_line}。"
+                        f"要求: 25字内, 一段话, 无标点花哨, 不提疲劳分数。"
                     )
                     if bridge is not None:
                         asyncio.create_task(_ds_wrapper(bridge, short_prompt, good_count, failed_count, reason))
