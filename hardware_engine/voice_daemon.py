@@ -1052,49 +1052,44 @@ def main():
         return False
 
     def _route_text(text):
-        """V7.1 \u610f\u56fe\u5206\u6d41\u8def\u7531:
-        - \u9759\u97f3\u6001: \u53ea\u54cd\u5e94\u89e3\u9664\u9759\u97f3, \u5176\u4ed6\u5168\u4e22
-        - \u4e71\u8bc6\u522b: \u76f4\u63a5 "\u6ca1\u542c\u6e05", \u4e0d\u8d70 LLM
-        - A \u8def (\u547d\u4ee4\u610f\u56fe): \u5f3a\u5236\u672c\u5730\u786c\u7f16\u7801; \u672a\u547d\u4e2d \u2192 "\u6ca1\u542c\u6e05"(\u4e0d\u8d70 LLM)
-        - B \u8def (\u95f2\u804a): \u8d70 DeepSeek, \u53ea\u8d70\u4e00\u6b21, \u4e0d\u518d\u53cc\u901a\u9053
+        """V7.1 意图分流路由 + M4 原文即时入右侧栏:
+        - M4: 每次路由一进门先把 ASR 原文写入 chat_input.txt (带 [voice-handled])
+              UI 立即显示用户气泡; 不再因 gibberish / A路miss / B路fail 而丢失
+        - 静音态: 只响应解除静音, 其他全丢
+        - 乱识别: 仍回 "没听清" (但文本已写入, 气泡已出)
+        - A 路 (命令意图): 强制本地硬编码; 未命中 -> "没听清"(不走 LLM)
+        - B 路 (闲聊): 走 DeepSeek, 只走一次, 不再双通道
         """
         if not text or len(text) < 2:
             return False
         _session_last_activity[0] = time.time()
 
-        # 1) \u9759\u97f3\u6001: _try_voice_command \u81ea\u5df1\u4f1a\u5904\u7406\u89e3\u9664\u9759\u97f3
+        # M4: 一进门先写原文到右侧栏 (带 FSM 跳过标记)
+        _publish_chat_input_raw(text)
+
+        # 1) 静音态
         if _is_muted[0]:
             _try_voice_command(client, text)
-            logging.info(u"\u9759\u97f3\u4e2d, \u4ec5\u54cd\u5e94\u89e3\u9664\u9759\u97f3: %s", text[:40])
+            logging.info(u"静音中, 仅响应解除静音: %s", text[:40])
             return True
 
-        # 2) \u4e71\u8bc6\u522b\u6805\u680f
+        # 2) 乱识别栅栏 (文本已写气泡, 仅 TTS 回"没听清")
         if _is_gibberish(text):
-            logging.info(u"[\u6805\u680f] \u4e71\u8bc6\u522b\u4e22\u5f03: %s", text[:40])
-            _speak_ack(u"\u6ca1\u542c\u6e05")
+            logging.info(u"[栅栏] 乱识别丢弃: %s", text[:40])
+            _speak_ack(u"没听清")
             return True
 
-        # 3) A \u8def: \u547d\u4ee4\u610f\u56fe \u2192 \u5f3a\u5236\u672c\u5730
+        # 3) A 路: 命令意图 -> 强制本地
         if _is_command_intent(text):
-            logging.info(u"[A\u8def] \u547d\u4ee4\u610f\u56fe: %s", text[:40])
+            logging.info(u"[A路] 命令意图: %s", text[:40])
             if _try_voice_command(client, text):
                 return True
-            # \u547d\u4ee4\u610f\u56fe\u4f46\u672a\u547d\u4e2d\u4efb\u4f55\u786c\u7f16\u7801 \u2192 \u62d2\u7edd LLM\u5047\u88c5\u7406\u89e3
-            logging.info(u"[A\u8def] \u672a\u547d\u4e2d\u786c\u7f16\u7801, \u62d2\u7edd\u8d70 LLM")
-            _speak_ack(u"\u6ca1\u542c\u6e05")
+            logging.info(u"[A路] 未命中硬编码, 拒绝走 LLM")
+            _speak_ack(u"没听清")
             return True
 
-        # 4) B \u8def: \u95f2\u804a \u2192 DeepSeek \u5f02\u6b65\u8c03\u7528 (\u4e0d\u963b\u585e\u4e3b\u5faa\u73af, \u907f\u514d\u5361\u6b7b mic)
-        logging.info(u"[B\u8def] \u95f2\u804a\u5f02\u6b65: %s", text[:40])
-        # \u5148\u628a\u7528\u6237\u53d1\u8a00\u5199\u5165 chat_input.txt (\u5c3e\u90e8\u5e26\u6807\u8bb0 FSM \u8df3\u8fc7\u53cc\u8c03)
-        try:
-            _display_text = text + u"\n[voice-handled]"
-            _tmp = CHAT_INPUT_FILE + ".tmp"
-            with open(_tmp, "w", encoding="utf-8") as _cf:
-                _cf.write(_display_text)
-            os.rename(_tmp, CHAT_INPUT_FILE)
-        except Exception as _e:
-            logging.debug(u"\u5199 chat_input \u5931\u8d25: %s", _e)
+        # 4) B 路: 闲聊 -> DeepSeek 异步 (M4 已写 chat_input, 此处不再重复写)
+        logging.info(u"[B路] 闲聊异步: %s", text[:40])
 
         def _async_deepseek(txt):
             try:
@@ -1311,6 +1306,24 @@ def _deliver_to_fsm(text):
         logging.info("投递到 FSM: %s", text)
     except Exception as e:
         logging.error("投递失败: %s", e)
+
+
+def _publish_chat_input_raw(text):
+    # type: (str) -> None
+    """M4 (V7.13, 2026-04-20): 把 ASR 原文写入 chat_input.txt (带 [voice-handled] 标记).
+    标记会被 streamer /api/chat_input 剥离, 被 FSM main_claw_loop 识别为"跳过"避免双 DeepSeek.
+    UI 轮询 chat_input 立即显示用户气泡 -- 即便后续被 gibberish/A路/B路失败拦下, 也能看到原话."""
+    if not text:
+        return
+    try:
+        payload = text + u"\n[voice-handled]"
+        tmp = CHAT_INPUT_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.rename(tmp, CHAT_INPUT_FILE)
+        logging.info(u"[M4] chat_input 原文已写入: %s", text[:40])
+    except Exception as e:
+        logging.debug(u"[M4] 写 chat_input 失败: %s", e)
 
 
 def _publish_chat_reply(reply):
