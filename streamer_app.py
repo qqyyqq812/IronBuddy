@@ -350,28 +350,34 @@ def api_fatigue_limit():
             return Response(json.dumps({"ok": False, "error": "limit out of range (100-10000)"}),
                             mimetype='application/json', status=400)
         ts = time.time()
+        # V7.30 R3: dual-write canonical + intent + ui display
+        act_payload = json.dumps({"limit": limit, "ts": ts, "src": "ui"})
         # 1) Actuation signal: FSM consumes + deletes
-        act_payload = json.dumps({"limit": limit, "ts": ts})
-        act_tmp = "/dev/shm/fatigue_limit.json.tmp"
-        act_target = "/dev/shm/fatigue_limit.json"
-        with open(act_tmp, "w", encoding="utf-8") as f:
-            f.write(act_payload)
-        os.rename(act_tmp, act_target)
-        # 2) Display signal: UI reads for current-value display (FSM doesn't touch this one)
-        ui_tmp = "/dev/shm/ui_fatigue_limit.json.tmp"
-        ui_target = "/dev/shm/ui_fatigue_limit.json"
-        with open(ui_tmp, "w", encoding="utf-8") as f:
-            f.write(act_payload)
-        os.rename(ui_tmp, ui_target)
+        _atomic_write_json("/dev/shm/fatigue_limit.json", act_payload)
+        # 2) Intent signal: FSM intent watcher (manual-pending) reads this
+        _atomic_write_json("/dev/shm/intent_fatigue_limit.json", act_payload)
+        # 3) Display signal: UI reads for current-value display (FSM doesn't touch this one)
+        _atomic_write_json("/dev/shm/ui_fatigue_limit.json", act_payload)
         return Response(json.dumps({"ok": True, "limit": limit}), mimetype='application/json')
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),
                         mimetype='application/json', status=500)
 
 
+def _atomic_write_json(path, payload):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(payload)
+    os.rename(tmp, path)
+
+
 @app.route('/api/exercise_mode', methods=['POST'])
 def api_exercise_mode():
-    """Switch exercise mode (T2): write signal for FSM to hot-swap squat↔curl."""
+    """Switch exercise mode (T2): write signal for FSM to hot-swap squat↔curl.
+
+    V7.30 R3 race fix: also publishes /dev/shm/intent_exercise_mode.json so
+    a future FSM intent watcher can observe UI-originated requests
+    separately from voice-originated authoritative writes."""
     try:
         data = request.get_json(force=True, silent=True) or {}
         mode = data.get("mode", "squat")
@@ -380,12 +386,9 @@ def api_exercise_mode():
                             mimetype='application/json', status=400)
         # Normalize: FSM/voice daemon use "squat" or "curl"
         norm_mode = "curl" if mode in ("curl", "bicep_curl") else "squat"
-        payload = json.dumps({"mode": norm_mode, "ts": time.time()})
-        tmp_path = "/dev/shm/exercise_mode.json.tmp"
-        target_path = "/dev/shm/exercise_mode.json"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.rename(tmp_path, target_path)
+        payload = json.dumps({"mode": norm_mode, "ts": time.time(), "src": "ui"})
+        _atomic_write_json("/dev/shm/exercise_mode.json", payload)
+        _atomic_write_json("/dev/shm/intent_exercise_mode.json", payload)
         return Response(json.dumps({"ok": True, "mode": norm_mode}), mimetype='application/json')
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),
@@ -755,19 +758,18 @@ def api_switch_vision():
 
 @app.route('/api/switch_inference_mode', methods=['POST'])
 def api_switch_inference_mode():
-    """Switch between pure_vision (if-else only) and vision_sensor (NN + EMG)."""
+    """Switch between pure_vision (if-else only) and vision_sensor (NN + EMG).
+
+    V7.30 R3: dual-write canonical + intent file (see api_exercise_mode)."""
     try:
         data = request.get_json(force=True, silent=True) or {}
         mode = data.get("mode", "pure_vision")
         if mode not in ("pure_vision", "vision_sensor"):
             return Response(json.dumps({"ok": False, "error": "invalid mode"}),
                             mimetype='application/json', status=400)
-        payload = json.dumps({"mode": mode, "ts": time.time()})
-        tmp_path = "/dev/shm/inference_mode.json.tmp"
-        target_path = "/dev/shm/inference_mode.json"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            f.write(payload)
-        os.rename(tmp_path, target_path)
+        payload = json.dumps({"mode": mode, "ts": time.time(), "src": "ui"})
+        _atomic_write_json("/dev/shm/inference_mode.json", payload)
+        _atomic_write_json("/dev/shm/intent_inference_mode.json", payload)
         return Response(json.dumps({"ok": True, "mode": mode}), mimetype='application/json')
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),
