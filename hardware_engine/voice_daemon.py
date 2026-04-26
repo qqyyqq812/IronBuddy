@@ -246,7 +246,11 @@ COMMAND_INTENT_WORDS = (
 
 # \u52a8\u4f5c\u540d + \u660e\u786e\u6307\u4ee4\u8bcd \u2192 A\u8def; \u5355\u72ec\u52a8\u4f5c\u540d + "\u600e\u4e48/\u5982\u4f55" \u2192 B\u8def
 _ACTION_NAMES = (u"\u6df1\u8e72", u"\u5f2f\u4e3e", u"\u54d1\u94c3", u"\u8e72\u8d77")
-_EXPLICIT_CMD_MARKERS = (u"\u5207\u6362", u"\u5207\u5230", u"\u6362\u5230", u"\u505a", u"\u5f00\u59cb", u"\u6a21\u5f0f")
+# V7.30 R1 fix: removed standalone "\u505a" \u2014 it caused "\u73b0\u5728\u9002\u5408\u505a\u6df1\u8e72\u5417" (a chat
+# question) to route as a command. Replaced with compound "\u60f3\u505a" so explicit
+# user-intent like "\u60f3\u505a\u6df1\u8e72" still hits A \u8def.
+_EXPLICIT_CMD_MARKERS = (u"\u5207\u6362", u"\u5207\u5230", u"\u6362\u5230",
+                          u"\u60f3\u505a", u"\u5f00\u59cb", u"\u6a21\u5f0f")
 
 # ===== M1 (V7.13, 2026-04-20): 更灵敏的唤醒词识别 =====
 # 原策略: any(w in text for w in WAKE_WORDS) 严格字串包含 -> 百度 ASR 错 1 个字就漏
