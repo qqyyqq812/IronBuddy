@@ -497,3 +497,73 @@ T20. 子视频 1+2 拍摄环境一键 ready
 - [ ] 进入 writing-plans skill 转交实施计划
 
 下一步：调用 writing-plans skill，把本文档转成可执行的逐步实施计划（每个 phase 拆成 commit-level task）。
+
+---
+
+## 10.1 Phase 0 验证日志
+
+**状态**：Pending — manual validation in morning（automated session 不能跑 simulator + FSM）
+
+### 待执行 checklist
+
+执行人：用户（早上）
+
+#### Squat 三类（基线：P0 修补已合入 M1+M2+M3+M4）
+
+```bash
+cd /home/qq/projects/embedded-fullstack
+python3 hardware_engine/main_claw_loop.py 2>&1 | tee /tmp/fsm.log &
+sleep 3
+echo '{"mode":"vision_sensor","ts":'$(date +%s)'}' > /dev/shm/inference_mode.json
+echo '{"exercise":"squat"}' > /dev/shm/user_profile.json
+
+# 三个 label 各跑 30 秒
+for L in standard compensating non_standard; do
+  killall -9 python3 2>/dev/null
+  sleep 1
+  python3 hardware_engine/main_claw_loop.py 2>&1 > /tmp/fsm_$L.log &
+  sleep 3
+  timeout 30 python3 tools/simulate_emg_from_mia.py --label $L > /tmp/sim_$L.log
+  sleep 1
+  cat /dev/shm/fsm_state.json
+done
+```
+
+期望：
+- standard → `good` 单调递增，`failed=0` `comp=0`
+- compensating → `comp` 单调递增，`good=0` `failed=0`
+- non_standard → `failed` 单调递增，`good=0` `comp=0`
+
+#### Curl 三类
+
+```bash
+echo '{"exercise":"bicep_curl"}' > /dev/shm/user_profile.json
+
+for L in standard compensating non_standard; do
+  killall -9 python3 2>/dev/null
+  sleep 1
+  python3 hardware_engine/main_claw_loop.py 2>&1 > /tmp/fsm_curl_$L.log &
+  sleep 3
+  timeout 30 python3 tools/simulate_emg_from_bicep.py --label $L > /tmp/sim_curl_$L.log
+  sleep 1
+  cat /dev/shm/fsm_state.json
+done
+```
+
+### 决策点
+
+- ✅ 三类都正确 → Phase 0 完成，直接 Phase 1 已合并的代码可用
+- ❌ 三类不能区分 → 转 Task 0.6（ESP32 微调）
+
+### 备注
+
+P0 修补改动包括 train_gru_three_class.py，但**模型未重训**（automated session 跳过）。
+M3 fix（Symmetry=1.0）需要重训生效：
+
+```bash
+python3 tools/train_gru_three_class.py --epochs 20
+```
+
+如果三类不区分，先确认是否因模型未重训。
+
+---
