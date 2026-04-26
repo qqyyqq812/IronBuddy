@@ -121,8 +121,9 @@ def _synthesize_compensating(golden_arr):
     mask_peak = comp[:, 6] > 0.55
     comp[mask_peak, 4] = np.clip(comp[mask_peak, 4] + 10, 85, 100)
 
-    # Symmetry 偏低 (代偿时左右发力不对称)
-    comp[:, 5] = comp[:, 5] * np.random.uniform(0.5, 0.75, size=n).astype(np.float32)
+    # V7.30 修补 M3：训练侧固定 sym=1.0，与推理侧对齐（推理时 Symmetry 列恒 1.0）
+    # 原 V7.15 偏置 `comp[:, 5] *= U(0.5, 0.75)` 与推理失准，导致训练分布与推理分布偏移
+    # comp[:, 5] = comp[:, 5] * np.random.uniform(0.5, 0.75, size=n).astype(np.float32)
     return comp
 
 
