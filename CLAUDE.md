@@ -44,15 +44,17 @@
 | `tools/{collect_training_data,train_model,dashboard}.py` | 数据采集 / GRU 训练 / Streamlit 面板 |
 | `.claude/rules/toybrick_board_rules.md` | 板端环境约束（Python 3.7, 无 pandas, ALSA, NPU）|
 
-## 当前状态（Sprint 4, 2026-04-15）
+## 当前状态（2026-04-26，Phase A 归档完成）
 
 - **架构**：5 进程 + `/dev/shm` JSON IPC（vision/streamer/fsm/emg/voice）
 - **视觉**：本地 YOLOv5-Pose NPU（默认）↔ Cloud RTMPose RTX 5090（可切）
 - **视频**：HDMI 直连 + MJPEG:8080 + Flask fallback 三路
 - **LLM**：DeepSeek 直连 REST API + SSE 流式
-- **语音**：百度 AipSpeech TTS/STT + ALSA 直驱
+- **语音**：百度 AipSpeech TTS/STT + ALSA 直驱（V7.26 顽疾根治，可用）
 - **识别**：FSM 即时计数 + GRU 3-head 教练点评双引擎
-- **待做**：语音唤醒调试、GRU 正式训练、systemd 自启动、SQLite 持久化
+- **Phase A 已完成**：项目归档整理（V7.23 spec 迁至 `.claude/specs/`，Karpathy/ECC 规范注入，stale docs/scripts 归档至 `.archive/`）
+- **分支**：`demo-fake-v7.35` 保存弯举演示 fake EMG 系统（可随时 checkout 复用）
+- **待做**：LaTeX 课程报告骨架（Phase B）、GRU 正式训练、systemd 自启动
 
 ## 关键决策速查
 
