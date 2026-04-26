@@ -1059,6 +1059,8 @@ async def main():
                             try:
                                 window = np.array(_gru_feature_buf[-_GRU_WINDOW_SIZE:],
                                                   dtype=np.float32)
+                                # V7.30 修补 M1：Ang_Vel 列推理归一化对齐训练 (train_gru_three_class.py:138)
+                                window[:, 0] = np.clip(window[:, 0] / 30.0, -3.0, 3.0)
                                 window[:, 1] /= 180.0
                                 window[:, 3] /= 100.0
                                 window[:, 4] /= 100.0
