@@ -4,6 +4,13 @@
 
 **硬件**：RK3399ProX（ARM CPU + NPU），**云服务**：RTX 5090 RTMPose 推理
 
+## claude-mem 启动纪律
+
+- 本项目**单独打开为 VSCode/Antigravity 工作区根**（File → Open Folder → `projects/embedded-fullstack/`），不要从 `/home/qq/` 根启动会话。
+- claude-mem 按 `basename(cwd)` 自动注入本项目专属历史；从根启动会污染 `qq` 桶。
+- 自检：会话第一条工具调用前确认 `process.cwd()` 是 `/home/qq/projects/embedded-fullstack` 而非 `/home/qq/`。
+- 跨桶查（罕见）：`mcp-search query="..." project=null`，不用切窗口。
+
 ## 关键文件导航
 
 | 文件/目录 | 用途 |
@@ -14,7 +21,16 @@
 | `templates/database.html` | 一站式数据库可视化（`/database` 路由，8 张表）|
 | `docs/验收表/深蹲神经网络权威指南.md` | ⭐ **深蹲 GRU 三分类权威（V7.15，唯一标准，取代 MIA数据集分析.md）** |
 | `docs/验收表/语音模块权威指南.md` | ⭐ **语音模块权威（V7.14 杀青）** |
+| `docs/验收表/弯举神经网络权威指南.md` | 弯举 GRU 三分类权威 |
 | `docs/验收表/V3_7D_全链路地图.md` | 弯举 GRU 管线（由弯举 AI 独立维护） |
+| `docs/验收表/视频拍摄SOP.md` | 答辩/比赛视频拍摄规程 |
+| `docs/report/latex/main.tex` | 课程结项报告 LaTeX 入口（ctex+xelatex，分章 sections/）|
+| `docs/technical/dataset_references/` | 公开数据集（EMAHA-DB6/MIA/Mendeley）下载状态备忘 |
+| `.claude/specs/V7.23_architecture/` | V7.23 架构权威规范（README + ARCHITECTURE_INDEX + UPDATE_LOG）|
+| `.claude/rules/karpathy-guidelines.md` | Karpathy 编码规范（CC 自动加载）|
+| `.claude/rules/skills-discipline.md` | ECC skills 使用纪律（场景→skill 速查）|
+| `.claude/rules/tools-tradeoffs.md` | rtk / 绘图 等工具链权衡记录 |
+| `.archive/` | 归档区（gitignore，本地可见，不进 git 历史）|
 | `hardware_engine/main_claw_loop.py` | 板端 FSM 主循环（深蹲/弯举 + GRU 推理）|
 | `hardware_engine/ai_sensory/cloud_rtmpose_client.py` | 视觉引擎（Cloud RTMPose + Local YOLOv5-Pose NPU 双模）|
 | `hardware_engine/ai_sensory/local_yolo_pose.py` | 本地 NPU 视觉推理（RKNN uint8）|
@@ -70,3 +86,5 @@ python tools/train_model.py
 - **禁止**：生成 `handoff_*.md`, `EXECUTION_PLAN_*.md`, 演讲稿、调研报告
 - **关键代码**：修改时更新 `docs/technical/decisions.md`
 - **通信约定**：所有进程通过 `/dev/shm/*.json` + atomic rename 交换数据
+- **编码规范**：遵循 `.claude/rules/karpathy-guidelines.md`（Think Before Coding / Simplicity First / 不写无用抽象）
+- **工具链 / skills 用法**：见 `.claude/rules/skills-discipline.md` 和 `.claude/rules/tools-tradeoffs.md`

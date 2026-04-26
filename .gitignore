@@ -59,7 +59,18 @@ streamer.log
 *.tmp
 tools/rknn-toolkit_source
 
-# V7.26: PPT 源文件不进仓库（GitHub 100MB 限制 + 全局规则）
-# PPT 演示稿按规范应去 /home/qq/docs/PPT/，不污染项目
-presentation/*.pptx
-presentation/**/*.pptx
+# === 重构 2026-04-26: 归档区不进 git ===
+.archive/
+
+# === LaTeX 课程报告编译产物 ===
+docs/report/latex/build/
+docs/report/latex/*.aux
+docs/report/latex/*.log
+docs/report/latex/*.out
+docs/report/latex/*.toc
+docs/report/latex/*.bbl
+docs/report/latex/*.blg
+docs/report/latex/*.fdb_latexmk
+docs/report/latex/*.fls
+docs/report/latex/*.synctex.gz
+docs/report/latex/sections/*.aux
