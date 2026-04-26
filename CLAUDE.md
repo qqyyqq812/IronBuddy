@@ -78,8 +78,9 @@ streamlit run tools/dashboard.py
 # 数据采集
 python tools/collect_training_data.py --mode bicep_curl
 
-# GRU 训练
-python tools/train_model.py
+# GRU 训练（V7.30：旧 train_model.py 已归档至 .archive/deprecated_v3map/）
+python tools/train_gru_three_class.py        # 深蹲
+python tools/train_gru_three_class_bicep.py  # 弯举
 ```
 
 ## 开发注意
