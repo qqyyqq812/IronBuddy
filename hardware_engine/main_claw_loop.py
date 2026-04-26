@@ -381,15 +381,17 @@ class SquatStateMachine:
                             pass
                         self._mode_last_ts = now_for_mode
 
-                    # V7.18 (2026-04-20): 无论模式, 每个 rep 必然归类 good/failed —— 取消"等待 GRU"悬空
-                    # 代偿 (comp) 仍由 GRU 分类独立累加, 与 good/failed 正交
-                    if bottom < self.ANGLE_STANDARD:
-                        self.good_squats += 1
-                        logging.info(f"🟢 标准（{self._mode_cache}）rep#{self._total_reps_count} 最低{bottom:.0f}° < {self.ANGLE_STANDARD}°  疲劳{self.total_fatigue_volume:.1f}")
-                    else:
-                        self.failed_squats += 1
-                        self.trigger_buzzer_alert()
-                        logging.warning(f"🟡 不标准（{self._mode_cache}）rep#{self._total_reps_count} 最低{bottom:.0f}° >= {self.ANGLE_STANDARD}°  累计违规{self.failed_squats}")
+                    # V7.30 修补 M2 / 恢复 V7.15 mode-gating：
+                    # vision_sensor 模式下 FSM 不直接 ++，让 GRU 分类独立累加 good/failed/comp
+                    # pure_vision 模式仍走角度硬判定（保留 V7.18 行为）
+                    if self._mode_cache != "vision_sensor":
+                        if bottom < self.ANGLE_STANDARD:
+                            self.good_squats += 1
+                            logging.info(f"🟢 标准（{self._mode_cache}）rep#{self._total_reps_count} 最低{bottom:.0f}° < {self.ANGLE_STANDARD}°  疲劳{self.total_fatigue_volume:.1f}")
+                        else:
+                            self.failed_squats += 1
+                            self.trigger_buzzer_alert()
+                            logging.warning(f"🟡 不标准（{self._mode_cache}）rep#{self._total_reps_count} 最低{bottom:.0f}° >= {self.ANGLE_STANDARD}°  累计违规{self.failed_squats}")
 
                     # 结算完毕，复位回归直立监控区
                     self.state = "STAND"
@@ -659,14 +661,16 @@ class DumbbellCurlFSM:
                             pass
                         self._mode_last_ts = now_for_mode
 
-                    # V7.18 (2026-04-20): 弯举也取消 vision_sensor 悬空 —— 每 rep 必归类
-                    if bottom < self.ANGLE_STANDARD:
-                        self._good_reps += 1
-                        logging.info(f"🟢 弯举标准（{self._mode_cache}）rep#{self._total_reps_count} 顶峰{bottom:.0f}° < {self.ANGLE_STANDARD}°  疲劳{self.total_fatigue_volume:.1f}")
-                    else:
-                        self._failed_reps += 1
-                        self.trigger_buzzer_alert()
-                        logging.warning(f"🟡 弯举不标准（{self._mode_cache}）rep#{self._total_reps_count} 顶峰{bottom:.0f}° >= {self.ANGLE_STANDARD}°  违规{self._failed_reps}")
+                    # V7.30 修补 M2 / 恢复 V7.15 mode-gating（弯举）：
+                    # vision_sensor 模式下 FSM 不直接 ++，让 GRU 分类独立累加 good/failed/comp
+                    if self._mode_cache != "vision_sensor":
+                        if bottom < self.ANGLE_STANDARD:
+                            self._good_reps += 1
+                            logging.info(f"🟢 弯举标准（{self._mode_cache}）rep#{self._total_reps_count} 顶峰{bottom:.0f}° < {self.ANGLE_STANDARD}°  疲劳{self.total_fatigue_volume:.1f}")
+                        else:
+                            self._failed_reps += 1
+                            self.trigger_buzzer_alert()
+                            logging.warning(f"🟡 弯举不标准（{self._mode_cache}）rep#{self._total_reps_count} 顶峰{bottom:.0f}° >= {self.ANGLE_STANDARD}°  违规{self._failed_reps}")
 
                     self.state = "STAND"
                     self._min_angle_in_rep = 999
