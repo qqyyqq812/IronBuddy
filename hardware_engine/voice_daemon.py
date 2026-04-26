@@ -21,6 +21,11 @@ import collections
 import struct
 import ctypes
 
+# V7.30 voice subsystem (state machine + arecord gate + turn id)
+from hardware_engine.voice.state import VoiceState, VoiceStateMachine
+from hardware_engine.voice.recorder import VADConfig, ArecordGate
+from hardware_engine.voice.turn import Turn, TurnWriter
+
 # Proxy disabled
 for k in ["http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"]:
     os.environ.pop(k, None)
@@ -578,18 +583,64 @@ _dialog_active = threading.Event()
 _dialog_set_ts = [0.0]  # mutable holder
 _DIALOG_MAX_SEC = 30.0
 
+# V7.30: voice subsystem singletons
+ACTIVE_SPEECH_CAP = 5.0  # 长独白硬截断 (s) — 由 VADConfig.apply_to_voice_daemon 覆盖
+_voice_sm = VoiceStateMachine()
+_arecord_gate = ArecordGate()
+_turn_writer = TurnWriter()
+_current_turn = [None]  # mutable holder for active dialog turn
+
+
+def _start_turn(stage="wake", text=None, extra=None):
+    """V7.30: open a new dialog turn and broadcast to UI via voice_turn.json."""
+    turn = Turn.new()
+    _current_turn[0] = turn
+    try:
+        _turn_writer.write(turn, stage=stage, text=text, extra=extra)
+    except OSError as e:
+        logging.warning(u"[TURN] start write failed: %s", e)
+    return turn
+
+
+def _emit_turn_stage(stage, text=None, extra=None):
+    """V7.30: write a stage update for the current turn (no-op if none)."""
+    turn = _current_turn[0]
+    if turn is None:
+        return
+    try:
+        _turn_writer.write(turn, stage=stage, text=text, extra=extra)
+    except OSError as e:
+        logging.warning(u"[TURN] stage=%s write failed: %s", stage, e)
+
+
+def _close_turn():
+    """V7.30: emit closed stage and drop the active turn ref."""
+    turn = _current_turn[0]
+    if turn is None:
+        return
+    try:
+        _turn_writer.write(turn, stage="closed")
+    except OSError as e:
+        logging.warning(u"[TURN] close write failed: %s", e)
+    _current_turn[0] = None
+
 
 def _dialog_enter():
-    """M3: 进入对话模式, 屏蔽所有警报 TTS"""
+    """M3: 进入对话模式, 屏蔽所有警报 TTS。V7.30: 同步 state machine."""
     _dialog_active.set()
     _dialog_set_ts[0] = time.time()
+    if _voice_sm.state != VoiceState.DIALOG:
+        _voice_sm.transition(VoiceState.DIALOG, reason="dialog_enter")
     logging.info(u"[M3_dialog] 进入对话, 警报屏蔽 ON")
 
 
 def _dialog_exit():
-    """M3: 退出对话模式, 恢复警报"""
+    """M3: 退出对话模式, 恢复警报。V7.30: 同步 state machine + 关闭 turn."""
     _dialog_active.clear()
     _dialog_set_ts[0] = 0.0
+    _close_turn()
+    if _voice_sm.state != VoiceState.LISTEN:
+        _voice_sm.transition(VoiceState.LISTEN, reason="dialog_exit")
     logging.info(u"[M3_dialog] 退出对话, 警报屏蔽 OFF")
 
 
@@ -785,6 +836,7 @@ def record_with_vad(timeout=VAD_TIMEOUT, fast_start=False):
 
     started = False
     silence_time = 0
+    speech_start = 0.0  # V7.30: 长独白硬截断起点
     audio_frames = []
     pre_roll = collections.deque(maxlen=15)
     start_time = time.time()
@@ -855,6 +907,7 @@ def record_with_vad(timeout=VAD_TIMEOUT, fast_start=False):
             if not started:
                 if rms > threshold:
                     started = True
+                    speech_start = time.time()
                     audio_frames.extend(pre_roll)
                     audio_frames.append(data)
                     logging.info("[VAD] 触发! rms=%.0f > thresh=%.0f", rms, threshold)
@@ -870,6 +923,11 @@ def record_with_vad(timeout=VAD_TIMEOUT, fast_start=False):
 
                 if silence_time > SILENCE_LIMIT:
                     logging.info("VAD: 停顿 %.1fs，录音结束", SILENCE_LIMIT)
+                    break
+
+                # V7.30 S6 fix: 长独白硬截断 (用户连续发声超过 ACTIVE_SPEECH_CAP 秒)
+                if (time.time() - speech_start) > ACTIVE_SPEECH_CAP:
+                    logging.warning("[VAD] 长独白截断 (>%.1fs), 强制结束", ACTIVE_SPEECH_CAP)
                     break
     finally:
         try:
@@ -1021,8 +1079,11 @@ def main():
     logging.info("BAIDU_API_KEY: %s", "已配置(%s...)" % BAIDU_API_KEY[:4] if BAIDU_API_KEY else "未配置!")
     logging.info("BAIDU_SECRET_KEY: %s", "已配置" if BAIDU_SECRET_KEY else "未配置!")
     logging.info("录音设备: %s, 播放设备: %s", DEVICE_REC, DEVICE_SPK)
-    logging.info("VAD参数: SILENCE_LIMIT=%.1fs, WAKE_TIMEOUT=%ds, VAD_TIMEOUT=%ds",
-                 SILENCE_LIMIT, WAKE_TIMEOUT, VAD_TIMEOUT)
+    # V7.30: install VAD caps from VADConfig (overrides legacy defaults)
+    _vad_cfg = VADConfig()
+    _vad_cfg.apply_to_voice_daemon(sys.modules[__name__])
+    logging.info("VAD参数: SILENCE_LIMIT=%.1fs, WAKE_TIMEOUT=%ds, VAD_TIMEOUT=%ds, ACTIVE_SPEECH_CAP=%.1fs",
+                 SILENCE_LIMIT, WAKE_TIMEOUT, VAD_TIMEOUT, ACTIVE_SPEECH_CAP)
     logging.info("====================")
 
     client = _init_baidu()
@@ -1352,6 +1413,8 @@ def main():
         logging.info(u"[\u5524\u9192] \u547d\u4e2d: %s | \u53bb\u5524\u9192\u540e: %s", text[:30], _stripped[:40])
 
         # M3: 进入对话状态, 屏蔽所有警报 (含不标准/代偿)
+        # V7.30: open new turn id for UI bubble dedupe (S1 fix)
+        _start_turn(stage="wake")
         _dialog_enter()
 
         # \u6709\u6307\u4ee4 \u2192 \u76f4\u63a5\u8def\u7531\u4e00\u6b21 \u2192 \u56de SLEEP
@@ -1567,6 +1630,8 @@ def _publish_chat_input_raw(text):
         logging.info(u"[M4] chat_input 原文已写入: %s", text[:40])
     except Exception as e:
         logging.debug(u"[M4] 写 chat_input 失败: %s", e)
+    # V7.30: also publish to voice_turn.json so UI dedupes by turn_id (S1)
+    _emit_turn_stage("user_input", text=text)
 
 
 def _publish_chat_reply(reply):
@@ -1589,6 +1654,8 @@ def _publish_chat_reply(reply):
         os.utime(path, (_ts, _ts))
     except Exception as e:
         logging.error("_publish_chat_reply \u5931\u8d25: %s", e)
+    # V7.30: emit assistant_reply stage so UI knows reply belongs to current turn (S1)
+    _emit_turn_stage("assistant_reply", text=reply)
 
 
 # V5.0 seq \u8ba1\u6570\u5668 (\u8fdb\u7a0b\u5185\u5b58, \u542f\u52a8\u4ece 0; FSM \u7aef\u4e0d\u5fc5\u540c\u6b65,watcher \u53ef\u517c\u5bb9\u6587\u4ef6 seq \u548c mtime \u53cc\u4fe1\u53f7)
