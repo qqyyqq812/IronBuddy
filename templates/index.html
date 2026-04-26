@@ -2233,6 +2233,14 @@ function appendChatBubble(role, text, type) {
         chatArea.appendChild(bubble);
     }
     chatArea.scrollTop = chatArea.scrollHeight;
+    return bubble;
+}
+
+// V7.30 S1: update existing bubble text in place, preserving role + timestamp.
+function updateChatBubbleText(bubble, role, text) {
+    const tsSpan = bubble.querySelector('.bubble-time');
+    const tsHtml = tsSpan ? tsSpan.outerHTML : '';
+    bubble.innerHTML = '<div class="bubble-role">' + role + '</div>' + escapeHtml(text) + tsHtml;
 }
 
 function escapeHtml(str) {
@@ -3548,14 +3556,21 @@ setInterval(async () => {
 }, 2000);
 
 // V7.7: 合并 chat_reply / chat_input 按 mtime 排序 append, 修复气泡顺序倒置
+// V7.30 S1: 同一 turn 内多次 STT 更新只刷新已有气泡, 避免重复气泡
+let lastTurnId = '';
+let currentUserBubble = null;
+let currentReplyBubble = null;
+
 setInterval(async () => {
-    let newItems = [];
+    let inputTurnId = '', inputText = '';
+    let replyTurnId = '', replyText = '';
     try {
         const res = await fetch('/api/chat_reply', { cache: 'no-store' });
         if (res.ok) {
             const d = await res.json();
             if (d.reply && d.ts > lastChatReplyTs) {
-                newItems.push({ ts: d.ts, role: '教练', text: d.reply, type: 'bot' });
+                replyTurnId = d.turn_id || '';
+                replyText = d.reply;
                 lastChatReplyTs = d.ts;
             }
         }
@@ -3565,7 +3580,8 @@ setInterval(async () => {
         if (res.ok) {
             const d = await res.json();
             if (d.text && d.ts > lastChatInputTs) {
-                newItems.push({ ts: d.ts, role: '我', text: d.text, type: 'user' });
+                inputTurnId = d.turn_id || '';
+                inputText = d.text;
                 lastChatInputTs = d.ts;
                 lastDraft = '';
                 const dn = document.getElementById('draftBubble');
@@ -3573,10 +3589,29 @@ setInterval(async () => {
             }
         }
     } catch(e) {}
-    // V7.7: 按 mtime 升序 append, 保证"我"先于"教练"
-    newItems.sort((a, b) => a.ts - b.ts);
-    for (const item of newItems) {
-        appendChatBubble(item.role, item.text, item.type);
+
+    // V7.30 S1: rotate bubble refs only when turn_id actually changes.
+    // Empty turn_id (legacy or transient) falls through and creates a new bubble.
+    const incomingTurn = inputTurnId || replyTurnId;
+    if (incomingTurn && incomingTurn !== lastTurnId) {
+        lastTurnId = incomingTurn;
+        currentUserBubble = null;
+        currentReplyBubble = null;
+    }
+
+    if (inputText) {
+        if (currentUserBubble && inputTurnId && inputTurnId === lastTurnId) {
+            updateChatBubbleText(currentUserBubble, '我', inputText);
+        } else {
+            currentUserBubble = appendChatBubble('我', inputText, 'user');
+        }
+    }
+    if (replyText) {
+        if (currentReplyBubble && replyTurnId && replyTurnId === lastTurnId) {
+            updateChatBubbleText(currentReplyBubble, '教练', replyText);
+        } else {
+            currentReplyBubble = appendChatBubble('教练', replyText, 'bot');
+        }
     }
 
     try {

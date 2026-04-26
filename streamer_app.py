@@ -210,23 +210,38 @@ def chat_input():
         return Response(json.dumps({"ok": False, "error": str(e)}), mimetype='application/json', status=500)
 
 
+def _read_voice_turn():
+    """V7.30 S1: read /dev/shm/voice_turn.json and return (turn_id, stage) or ('', '')."""
+    try:
+        if os.path.exists("/dev/shm/voice_turn.json"):
+            with open("/dev/shm/voice_turn.json", "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("turn_id", ""), data.get("stage", "")
+    except Exception:
+        pass
+    return "", ""
+
+
 @app.route('/api/chat_reply')
 def chat_reply():
-    """读取 DeepSeek 对话回复"""
+    """读取 DeepSeek 对话回复 (V7.30: 附带 turn_id 让前端去重气泡)"""
     try:
         if os.path.exists("/dev/shm/chat_reply.txt"):
             with open("/dev/shm/chat_reply.txt", "r", encoding="utf-8") as f:
                 reply = f.read().strip()
             mtime = os.path.getmtime("/dev/shm/chat_reply.txt")
-            return Response(json.dumps({"reply": reply, "ts": mtime}, ensure_ascii=False), mimetype='application/json')
+            turn_id, stage = _read_voice_turn()
+            return Response(json.dumps(
+                {"reply": reply, "ts": mtime, "turn_id": turn_id, "stage": stage},
+                ensure_ascii=False), mimetype='application/json')
     except Exception:
         pass
-    return Response('{"reply":"","ts":0}', mimetype='application/json')
+    return Response('{"reply":"","ts":0,"turn_id":"","stage":""}', mimetype='application/json')
 
 
 @app.route('/api/chat_input')
 def get_chat_input():
-    """读取用户语音识别内容 (V7.5: 去除 [voice-handled] 内部标记)"""
+    """读取用户语音识别内容 (V7.5: 去除 [voice-handled] 内部标记; V7.30: 附 turn_id)"""
     try:
         if os.path.exists("/dev/shm/chat_input.txt"):
             with open("/dev/shm/chat_input.txt", "r", encoding="utf-8") as f:
@@ -234,10 +249,25 @@ def get_chat_input():
             # V7.5: 剥离 FSM 路由控制标记
             content = content.replace("[voice-handled]", "").strip()
             mtime = os.path.getmtime("/dev/shm/chat_input.txt")
-            return Response(json.dumps({"text": content, "ts": mtime}, ensure_ascii=False), mimetype='application/json')
+            turn_id, stage = _read_voice_turn()
+            return Response(json.dumps(
+                {"text": content, "ts": mtime, "turn_id": turn_id, "stage": stage},
+                ensure_ascii=False), mimetype='application/json')
     except Exception:
         pass
-    return Response('{"text":"","ts":0}', mimetype='application/json')
+    return Response('{"text":"","ts":0,"turn_id":"","stage":""}', mimetype='application/json')
+
+
+@app.route('/api/voice_turn')
+def get_voice_turn():
+    """V7.30: expose current voice turn metadata for UI bubble dedupe (S1)."""
+    try:
+        if os.path.exists("/dev/shm/voice_turn.json"):
+            with open("/dev/shm/voice_turn.json", "r", encoding="utf-8") as f:
+                return Response(f.read(), mimetype='application/json')
+    except Exception:
+        pass
+    return Response('{"turn_id":"","stage":"","ts":0}', mimetype='application/json')
 
 @app.route('/api/nn_inference')
 def nn_inference():
