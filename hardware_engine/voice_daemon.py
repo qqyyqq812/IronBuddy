@@ -2418,5 +2418,79 @@ def _write_signal(path, data):
         logging.error("写信号文件失败 %s: %s", path, e)
 
 
+# V7.30: realise router Action — adapter from voice/router.py output to live shm writes.
+# Wire-up into _route_text deferred to manual session: this function is exercised
+# by unit tests today, will replace the if-chain in _route_text after live STT validation.
+def _realize_action(action, speak_fn=None):
+    """Map a voice/router.py Action to side effects (shm writes + speak)."""
+    if action is None or action.kind == "silent":
+        return False
+    if action.kind == "speak":
+        if action.text and speak_fn is not None:
+            speak_fn(action.text)
+        return True
+    # action.kind == "tool"
+    name = action.tool_name
+    args = action.args or {}
+    now = time.time()
+    if name == "set_mute":
+        _write_signal("/dev/shm/mute_signal.json",
+                       {"muted": bool(args.get("muted")), "ts": now})
+    elif name == "stop_speaking":
+        _write_signal("/dev/shm/voice_interrupt", {"ts": now})
+    elif name == "switch_exercise":
+        mode = args.get("action") or args.get("mode")
+        if mode in ("squat", "curl"):
+            _write_signal("/dev/shm/exercise_mode.json", {"mode": mode, "ts": now})
+            _write_signal("/dev/shm/user_profile.json",
+                           {"exercise": "bicep_curl" if mode == "curl" else "squat", "ts": now})
+    elif name == "switch_vision_mode":
+        mode = args.get("mode")
+        if mode in ("pure_vision", "vision_sensor"):
+            _write_signal("/dev/shm/inference_mode.json", {"mode": mode, "ts": now})
+    elif name == "switch_inference_backend":
+        backend = args.get("backend")
+        if backend in ("local_npu", "cloud_gpu"):
+            _write_signal("/dev/shm/vision_mode.json", {"mode": backend, "ts": now})
+    elif name == "set_fatigue_limit":
+        try:
+            limit = int(args.get("value"))
+        except (TypeError, ValueError):
+            limit = 0
+        if 100 <= limit <= 5000:
+            _write_signal("/dev/shm/fatigue_limit.json", {"limit": limit, "ts": now})
+    elif name == "start_mvc_calibrate":
+        _write_signal("/dev/shm/auto_mvc.json", {"trigger": "voice", "ts": now})
+    elif name == "push_feishu_summary":
+        _write_signal("/dev/shm/auto_trigger.json",
+                       {"reason": "feishu_summary", "ts": now})
+    elif name == "shutdown":
+        _write_signal("/dev/shm/shutdown.json", {"reason": "voice", "ts": now})
+    elif name == "report_status":
+        if speak_fn is not None:
+            speak_fn(_format_status_report())
+        return True
+    else:
+        logging.info(u"[ROUTER] unknown tool: %s", name)
+        return False
+    if action.text and speak_fn is not None:
+        speak_fn(action.text)
+    return True
+
+
+def _format_status_report():
+    """Read /dev/shm/fsm_state.json and produce a 1-sentence status string."""
+    try:
+        with open("/dev/shm/fsm_state.json", "r") as f:
+            data = json.load(f)
+        good = data.get("good", 0)
+        failed = data.get("failed", 0)
+        comp = data.get("comp", 0)
+        fatigue = int(data.get("fatigue", 0))
+        return u"已完成%d次标准、%d次违规、%d次代偿，疲劳值%d" % (good, failed, comp, fatigue)
+    except (OSError, ValueError, KeyError):
+        return u"暂无训练数据"
+
+
 if __name__ == "__main__":
     main()
