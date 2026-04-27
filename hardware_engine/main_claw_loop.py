@@ -1259,6 +1259,24 @@ async def main():
             should_trigger = (manual_trigger or fatigue_trigger) and has_data and not _ds_lock[0] and not is_chatting and not is_muted
 
             if should_trigger:
+                # V7.30 Phase 3: emit /dev/shm/auto_trigger.json so voice_daemon
+                # state machine can transition LISTEN→BUSY before TTS starts
+                # (otherwise mic might catch the playback and re-route as input).
+                try:
+                    _auto_trigger_payload = {
+                        "reason": "fatigue_max" if fatigue_trigger else "manual",
+                        "good": fsm.good_squats,
+                        "failed": fsm.failed_squats,
+                        "comp": getattr(fsm, '_compensation_count', 0),
+                        "fatigue": round(fsm.total_fatigue_volume, 1),
+                        "ts": time.time(),
+                    }
+                    _auto_tmp = "/dev/shm/auto_trigger.json.tmp"
+                    with open(_auto_tmp, "w", encoding="utf-8") as _af:
+                        json.dump(_auto_trigger_payload, _af)
+                    os.rename(_auto_tmp, "/dev/shm/auto_trigger.json")
+                except OSError as _ate:
+                    logging.warning("auto_trigger.json write failed: %s", _ate)
                 # M12 (V7.20, 2026-04-20): 防止 LLM 不通时 _ds_lock 永久死锁
                 # 上一个 bug: connected=False 时仍设 _ds_lock=True + _this_set_triggered=True,
                 # 但 _ds_wrapper (唯一解锁者) 不被调用, 整个 session 再也无法触发任何总结.

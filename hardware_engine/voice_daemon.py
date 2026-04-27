@@ -1171,6 +1171,8 @@ def main():
     try:
         threading.Thread(target=_llm_reply_watcher, daemon=True).start()
         threading.Thread(target=_chat_reply_watcher, daemon=True).start()
+        # V7.30 Phase 3: auto trigger watcher (fatigue_max / manual button)
+        threading.Thread(target=_auto_trigger_watcher, daemon=True).start()
         # V7.3: mute \u53cc\u5411\u540c\u6b65 (UI \u89e3\u9664\u9759\u97f3 \u2192 voice_daemon \u540c\u6b65)
         threading.Thread(target=_mute_signal_watcher, daemon=True).start()
         # V7.8: mic \u9632\u6b7b\u9501 watchdog
@@ -1836,6 +1838,53 @@ def _llm_reply_watcher():
                 logging.info(u"[LLM_Watcher] \u91cd\u590d\u5185\u5bb9\u5e72\u901f\u4e22\u5f03: %s", txt[:40])
         except Exception as e:
             logging.debug(u"[LLM_Watcher] %s", e)
+
+
+def _auto_trigger_watcher():
+    """V7.30 Phase 3: watch /dev/shm/auto_trigger.json \u2014 fatigue/manual auto trigger.
+
+    FSM writes auto_trigger.json before kicking off LLM summary. We:
+      1. Transition state machine LISTEN\u2192BUSY (suspends record_with_vad)
+      2. Open a new auto-Turn for UI dedupe (different from a wake turn)
+      3. Suspend arecord so the upcoming TTS doesn't bleed into the mic
+    The actual TTS playback is handled by _llm_reply_watcher when llm_reply.txt
+    arrives. After that watcher resets _mic_allowed, this state will naturally
+    transition back to LISTEN on the next dialog cycle.
+    """
+    path = "/dev/shm/auto_trigger.json"
+    last_ts = 0.0
+    logging.info(u"[AutoTrigger] watcher up")
+    while True:
+        time.sleep(0.5)
+        try:
+            if not os.path.exists(path):
+                continue
+            mtime = os.path.getmtime(path)
+            if mtime == last_ts:
+                continue
+            last_ts = mtime
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            reason = payload.get("reason", "unknown")
+            logging.info(u"[AutoTrigger] fired reason=%s good=%s failed=%s comp=%s",
+                         reason, payload.get("good"), payload.get("failed"),
+                         payload.get("comp"))
+            if _voice_sm.state != VoiceState.BUSY:
+                _voice_sm.transition(VoiceState.BUSY, reason="auto_" + reason)
+            _arecord_gate.suspend()
+            _start_turn(stage="auto", text=None,
+                         extra={"trigger_source": reason,
+                                "stats": {
+                                    "good": payload.get("good", 0),
+                                    "failed": payload.get("failed", 0),
+                                    "comp": payload.get("comp", 0),
+                                }})
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        except (OSError, ValueError) as e:
+            logging.debug(u"[AutoTrigger] %s", e)
 
 
 def _chat_reply_watcher():
