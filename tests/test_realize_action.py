@@ -177,3 +177,26 @@ def test_format_status_report_renders_data(adapter_ns):
         out = adapter_ns["_format_status_report"]()
     assert u"10" in out
     assert u"850" in out
+
+
+def test_switch_exercise_curl_emits_mvc_followup_tip(adapter_ns, Action):
+    """V7.30 Phase 3: switching to curl should suggest MVC calibration."""
+    speak = mock.MagicMock()
+    adapter_ns["_realize_action"](
+        Action("tool", u"好，切到弯举", "switch_exercise", {"action": "curl"}),
+        speak_fn=speak,
+    )
+    spoken_texts = [c.args[0] for c in speak.call_args_list]
+    assert any(u"弯举" in t for t in spoken_texts)
+    assert any(u"MVC" in t for t in spoken_texts)
+
+
+def test_switch_exercise_squat_no_mvc_followup(adapter_ns, Action):
+    """Switching to squat does NOT trigger the MVC suggestion."""
+    speak = mock.MagicMock()
+    adapter_ns["_realize_action"](
+        Action("tool", u"好，切到深蹲", "switch_exercise", {"action": "squat"}),
+        speak_fn=speak,
+    )
+    spoken_texts = [c.args[0] for c in speak.call_args_list]
+    assert not any(u"MVC" in t for t in spoken_texts)

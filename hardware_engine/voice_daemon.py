@@ -2497,6 +2497,11 @@ def _realize_action(action, speak_fn=None):
             _write_signal("/dev/shm/exercise_mode.json", {"mode": mode, "ts": now})
             _write_signal("/dev/shm/user_profile.json",
                            {"exercise": "bicep_curl" if mode == "curl" else "squat", "ts": now})
+            # V7.30 Phase 3: curl 模式下提示 MVC 校准 (隐式确认 — 不强制执行)
+            if mode == "curl" and speak_fn is not None and action.text:
+                speak_fn(action.text)
+                speak_fn(u"准备好后请说 开始 MVC 测试")
+                return True
     elif name == "switch_vision_mode":
         mode = args.get("mode")
         if mode in ("pure_vision", "vision_sensor"):
