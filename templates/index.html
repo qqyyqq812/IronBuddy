@@ -1700,8 +1700,7 @@
             100% { transform: translate(-50%, -50%) scale(0.92); opacity: 0; }
         }
     </style>
-    <!-- V7.36: 2D force-graph for code structure (Obsidian-style) -->
-    <script src="https://unpkg.com/force-graph@1.43.5/dist/force-graph.min.js"></script>
+    <!-- V7.36→V7.37: removed force-graph CDN; debug tab uses GitHub external links instead -->
 </head>
 <body>
 
@@ -1956,17 +1955,34 @@
                     </div>
                 </div>
 
-                <!-- TAB 2: Debug Workbench (V7.36 重构：代码图 + 反馈 + iframe + 折叠日志) -->
+                <!-- TAB 2: Debug Workbench (V7.37：代码图改为 GitHub 外链卡 + 反馈 + iframe + 折叠日志) -->
                 <div class="tab-panel" id="tab-logs">
-                    <div class="workbench-card" style="margin-bottom:10px;">
+                    <div class="workbench-card" id="codeGraphMount" style="margin-bottom:10px;">
                         <div class="workbench-head">
-                            <div class="workbench-title">&#129504; 代码结构图</div>
-                            <div class="workbench-meta" id="codeGraphMeta">点击节点展开邻居 · git diff 着色</div>
+                            <div class="workbench-title">&#129504; 代码仓库导航</div>
+                            <div class="workbench-meta" id="codeGraphMeta">本轮运行版本 · 实时同步 GitHub</div>
                         </div>
-                        <div id="codeGraphMount" style="height:360px; position:relative; background:var(--bg-primary, #0a0a0c); border-radius:6px; overflow:hidden;">
-                            <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:0.78em; text-align:center; padding:20px;">
-                                运行 <code style="margin:0 4px;">python3 tools/build_code_graph.py --refresh</code> 后刷新本页
-                            </div>
+                        <div id="codeGraphLinks" style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px;">
+                            <a id="codeGraphLinkRepo" target="_blank" rel="noopener" href="https://github.com/qqyyqq812/IronBuddy"
+                               style="text-decoration:none; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:6px; background:var(--bg-card); color:var(--text-default);">
+                                <div style="font-size:0.72em; color:var(--text-muted);">GitHub 仓库</div>
+                                <div style="font-size:0.86em; color:var(--accent-cyan);">qqyyqq812 / IronBuddy ↗</div>
+                            </a>
+                            <a id="codeGraphLinkBranch" target="_blank" rel="noopener" href="https://github.com/qqyyqq812/IronBuddy/tree/main"
+                               style="text-decoration:none; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:6px; background:var(--bg-card); color:var(--text-default);">
+                                <div style="font-size:0.72em; color:var(--text-muted);">当前分支</div>
+                                <div style="font-size:0.86em; color:var(--accent-cyan);" id="codeGraphBranchLabel">main ↗</div>
+                            </a>
+                            <a id="codeGraphLinkCommit" target="_blank" rel="noopener" href="https://github.com/qqyyqq812/IronBuddy/commits/main"
+                               style="text-decoration:none; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:6px; background:var(--bg-card); color:var(--text-default);">
+                                <div style="font-size:0.72em; color:var(--text-muted);">本轮版本 SHA</div>
+                                <div style="font-size:0.86em; color:var(--accent-cyan);" id="codeGraphCommitLabel">--</div>
+                            </a>
+                            <a id="codeGraphLinkDeps" target="_blank" rel="noopener" href="https://github.com/qqyyqq812/IronBuddy/network/dependencies"
+                               style="text-decoration:none; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:6px; background:var(--bg-card); color:var(--text-default);">
+                                <div style="font-size:0.72em; color:var(--text-muted);">依赖结构</div>
+                                <div style="font-size:0.86em; color:var(--accent-cyan);">dependency graph ↗</div>
+                            </a>
                         </div>
                     </div>
 
@@ -3530,98 +3546,26 @@ async function loadDebugWorkbench() {
 
 // V7.36: loadDemoShowcase 已删除（RAG/OpenCloud 走后台 /database 页）
 
-// V7.36: code structure graph (Obsidian-style 2D force-graph)
-let _codeGraphInstance = null;
-let _codeGraphLoaded = false;
-
-function _codeGraphColor(d) {
-    if (d.git_age_days < 0) return '#facc15';      // uncommitted = amber
-    if (d.git_age_days <= 7) return '#fb923c';     // fresh = orange
-    if (d.git_age_days <= 30) return '#5ec8ff';    // recent = cyan
-    return '#4b5563';                              // stale = gray
-}
-
-function _codeGraphSize(loc) {
-    var s = Math.sqrt(loc || 0) * 0.4 + 3;
-    if (s < 4) return 4;
-    if (s > 14) return 14;
-    return s;
-}
-
+// V7.37: code graph 改为 GitHub 外链卡。本函数读 /api/code_graph 拿当前 commit
+// SHA + 分支，把 4 个外链 href 同步到当前运行版本。force-graph 已删。
 async function loadCodeGraph() {
-    var mount = document.getElementById('codeGraphMount');
-    if (!mount) return;
-    if (_codeGraphLoaded) return;  // render once per tab visit; resize on demand
-    if (typeof ForceGraph !== 'function') {
-        mount.innerHTML = '<div style="padding:14px; color:var(--text-dim, #71717a); font-size:0.78em;">force-graph CDN 未加载（联网或本地缓存失败）</div>';
-        return;
-    }
     try {
         var r = await fetch('/api/code_graph', {cache:'no-store'});
         var d = await r.json();
-        if (!d.ok) {
-            mount.innerHTML = '<div style="padding:14px; color:var(--text-dim, #71717a); font-size:0.78em;">' +
-                escapeHtml(d.message || d.error || '未生成') + '</div>';
-            return;
+        if (!d || !d.ok) return;
+        var commit = d.commit || '';
+        var commitLabel = document.getElementById('codeGraphCommitLabel');
+        var commitLink = document.getElementById('codeGraphLinkCommit');
+        if (commit && commitLabel) commitLabel.textContent = commit + ' ↗';
+        if (commit && commitLink) {
+            commitLink.href = 'https://github.com/qqyyqq812/IronBuddy/commit/' + commit;
         }
-        var data = {
-            nodes: (d.nodes || []).map(function(n) {
-                return {
-                    id: n.id,
-                    label: n.label,
-                    kind: n.kind,
-                    loc: n.loc,
-                    git_age_days: n.git_age_days,
-                    path: n.path,
-                    val: _codeGraphSize(n.loc),
-                    color: _codeGraphColor(n)
-                };
-            }),
-            links: (d.edges || []).map(function(e) { return {source: e.source, target: e.target}; })
-        };
-        mount.innerHTML = '';
-        _codeGraphInstance = ForceGraph()(mount)
-            .width(mount.clientWidth)
-            .height(360)
-            .backgroundColor('#0a0e17')
-            .nodeId('id')
-            .nodeLabel(function(n) {
-                var age = n.git_age_days < 0 ? '未提交' : n.git_age_days + ' 天前';
-                return n.path + ' · ' + n.kind + ' · ' + n.loc + ' loc · ' + age;
-            })
-            .nodeCanvasObjectMode(function() { return 'after'; })
-            .nodeCanvasObject(function(n, ctx, scale) {
-                ctx.fillStyle = n.color;
-                ctx.beginPath();
-                ctx.arc(n.x, n.y, n.val, 0, 2 * Math.PI);
-                ctx.fill();
-                if (scale > 1.4) {
-                    ctx.font = '4px system-ui';
-                    ctx.fillStyle = 'rgba(232,236,241,0.85)';
-                    ctx.textAlign = 'center';
-                    ctx.fillText(n.label, n.x, n.y + n.val + 5);
-                }
-            })
-            .linkColor(function() { return 'rgba(94,200,255,0.18)'; })
-            .linkWidth(0.6)
-            .d3VelocityDecay(0.35)
-            .onNodeClick(function(n) {
-                var meta = document.getElementById('codeGraphMeta');
-                if (meta) {
-                    var age = n.git_age_days < 0 ? '未提交' : n.git_age_days + ' 天前';
-                    meta.textContent = n.path + ' · ' + n.kind + ' · ' + n.loc + ' loc · ' + age;
-                }
-                // Center on the clicked node
-                _codeGraphInstance.centerAt(n.x, n.y, 600).zoom(2.4, 600);
-            })
-            .graphData(data);
-        _codeGraphLoaded = true;
-        // Refresh size on window resize
-        window.addEventListener('resize', function() {
-            if (_codeGraphInstance) _codeGraphInstance.width(mount.clientWidth);
-        });
+        var meta = document.getElementById('codeGraphMeta');
+        if (meta) {
+            meta.textContent = 'commit ' + (commit || '?') + ' · ' +
+                (d.nodes ? d.nodes.length : 0) + ' 个文件 · 实时同步 GitHub';
+        }
     } catch(e) {
-        mount.innerHTML = '<div style="padding:14px; color:var(--accent-red, #ef4444); font-size:0.78em;">代码图加载失败: ' + escapeHtml(e.message) + '</div>';
     }
 }
 
