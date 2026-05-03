@@ -74,3 +74,23 @@ docs/report/latex/*.fdb_latexmk
 docs/report/latex/*.fls
 docs/report/latex/*.synctex.gz
 docs/report/latex/sections/*.aux
+
+# === V7.37: 后台运行时状态 + run 目录 + backup 拦截 ===
+# OpenClaw 后台状态（含 chat_id_masked 等运行信息）
+data/runtime/
+# operator/sensor lab run 目录（每次实测产生大量截图 + jsonl，不入仓）
+docs/test_runs/ironbuddy_operator/2*/
+docs/test_runs/ironbuddy_sensor_lab/2*/
+# 脚本/模块旧备份（V4.5 升级前留下的 .bak_pre_v45 等）
+*.bak_pre_v45
+*.bak_*
+# SQLite 数据库时间戳备份
+data/ironbuddy.db.bak_*
+# Playwright MCP 缓存
+.playwright-mcp/
+
+# === V7.37 GitHub 同步：开源前需要排除 ===
+# Antigravity 自动生成的 patch 摘要（含命令行参数 + 路径）
+.agent_memory/
+# 本地大尺寸 ppt（pptx 体积大，外置存储）
+presentation/*.pptx
