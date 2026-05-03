@@ -204,6 +204,30 @@
             color: var(--accent-red);
             background: rgba(255,71,87,0.08);
         }
+        .volume-control {
+            width: 118px;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 0 10px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--bg-surface);
+            color: var(--text-muted);
+            flex-shrink: 0;
+        }
+        .volume-control input[type="range"] {
+            width: 66px;
+            accent-color: var(--accent);
+        }
+        .volume-value {
+            min-width: 18px;
+            text-align: right;
+            font-size: 0.68em;
+            font-variant-numeric: tabular-nums;
+            color: var(--accent);
+        }
 
         .conn-dot {
             width: 8px; height: 8px;
@@ -1005,6 +1029,91 @@
             color: var(--accent);
         }
 
+        .workbench-card {
+            background: linear-gradient(180deg, rgba(16,23,42,0.92), rgba(10,14,24,0.86));
+            border: 1px solid rgba(94,200,255,0.18);
+            border-radius: var(--radius-sm);
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+        .workbench-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .workbench-title {
+            font-size: 0.74em;
+            font-weight: 700;
+            color: var(--text);
+            letter-spacing: 0.03em;
+        }
+        .workbench-meta {
+            font-size: 0.66em;
+            color: var(--text-dim);
+            line-height: 1.55;
+        }
+        .workbench-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid rgba(0,212,170,0.35);
+            background: rgba(0,212,170,0.08);
+            color: var(--accent-green);
+            text-decoration: none;
+            font-size: 0.72em;
+            font-weight: 700;
+        }
+        .demo-list {
+            display: grid;
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .demo-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 6px 8px;
+            border: 1px solid rgba(99,115,155,0.18);
+            border-radius: 6px;
+            background: rgba(255,255,255,0.035);
+            font-size: 0.7em;
+        }
+        .demo-row span:first-child { color: var(--text-muted); }
+        .demo-row span:last-child {
+            color: var(--text);
+            text-align: right;
+            overflow-wrap: anywhere;
+        }
+        .code-graph {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 7px;
+            margin-top: 8px;
+        }
+        .graph-node {
+            border: 1px solid rgba(94,200,255,0.18);
+            border-radius: 6px;
+            padding: 7px 8px;
+            background: rgba(94,200,255,0.055);
+            font-size: 0.7em;
+        }
+        .graph-node .kind {
+            color: var(--accent);
+            font-size: 0.82em;
+            margin-left: 6px;
+        }
+        .graph-edge {
+            color: var(--text-dim);
+            font-size: 0.66em;
+            padding-left: 8px;
+            line-height: 1.45;
+        }
+
         /* Data browser */
         .data-tree { margin-top: var(--space-sm); }
         .tree-exercise {
@@ -1091,6 +1200,62 @@
         }
         .form-select option {
             background: #1a1f35;
+        }
+
+        .seg-control {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 6px;
+        }
+        .seg-control button {
+            min-height: 34px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.035);
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.78em;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all var(--transition);
+        }
+        .seg-control button.active {
+            border-color: rgba(0,212,170,0.55);
+            background: rgba(0,212,170,0.12);
+            color: var(--accent-green);
+        }
+
+        .angle-diag-strip {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 6px;
+            margin-top: 8px;
+        }
+        .angle-diag-cell {
+            min-width: 0;
+            padding: 6px 7px;
+            border-radius: 6px;
+            border: 1px solid rgba(99,115,155,0.18);
+            background: rgba(255,255,255,0.035);
+        }
+        .angle-diag-k {
+            font-size: 0.58em;
+            color: var(--text-dim);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .angle-diag-v {
+            margin-top: 2px;
+            font-size: 0.76em;
+            font-weight: 700;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         /* Model info card */
@@ -1491,6 +1656,11 @@
         <span class="status-tag" id="tagHdmi" style="display:none;">HDMI</span>
 
         <div class="header-controls">
+            <div class="volume-control" title="播报音量">
+                <span aria-hidden="true">&#128266;</span>
+                <input id="volumeSlider" type="range" min="1" max="15" value="7" oninput="setTtsVolume(this.value)">
+                <span class="volume-value" id="volumeValue">7</span>
+            </div>
             <button class="icon-btn" id="muteBtn" onclick="toggleMute()" title="静音切换">&#128266;</button>
             <div class="conn-dot" id="connDot" title="连接状态"></div>
             <span class="conn-label" id="connLabel">在线</span>
@@ -1597,6 +1767,15 @@
                 </div>
             </div>
 
+            <div class="angle-diag-strip" id="angleDiagStrip">
+                <div class="angle-diag-cell"><div class="angle-diag-k">Raw</div><div class="angle-diag-v" id="diagRawAngle">--</div></div>
+                <div class="angle-diag-cell"><div class="angle-diag-k">Smooth</div><div class="angle-diag-v" id="diagSmoothAngle">--</div></div>
+                <div class="angle-diag-cell"><div class="angle-diag-k">Decision</div><div class="angle-diag-v" id="diagDecisionAngle">--</div></div>
+                <div class="angle-diag-cell"><div class="angle-diag-k">KPT</div><div class="angle-diag-v" id="diagKptConf">--</div></div>
+                <div class="angle-diag-cell"><div class="angle-diag-k">FPS</div><div class="angle-diag-v" id="diagPoseFps">--</div></div>
+                <div class="angle-diag-cell"><div class="angle-diag-k">Backend</div><div class="angle-diag-v" id="diagAngleSource">--</div></div>
+            </div>
+
             <!-- Actions -->
             <div class="action-row">
                 <button class="btn-action danger" id="btnReset" onclick="resetSession()">&#128260; 重置统计</button>
@@ -1656,7 +1835,7 @@
                 </button>
                 <button class="tab-btn" data-tab="logs" onclick="switchTab('logs')">
                     <span>&#128187;</span>
-                    <span class="tab-label">日志</span>
+                    <span class="tab-label">调试</span>
                 </button>
                 <button class="tab-btn" data-tab="data" onclick="switchTab('data')">
                     <span>&#128202;</span>
@@ -1712,8 +1891,15 @@
                     </div>
                 </div>
 
-                <!-- TAB 2: Logs -->
+                <!-- TAB 2: Debug Workbench -->
                 <div class="tab-panel" id="tab-logs">
+                    <div class="workbench-card">
+                        <div class="workbench-head">
+                            <div class="workbench-title">&#128295; 后台调试</div>
+                            <a class="workbench-link" id="operatorConsoleLink" href="http://127.0.0.1:8765/" target="_blank">打开调试台</a>
+                        </div>
+                        <div class="workbench-meta" id="debugWorkbenchInfo">加载调试台状态...</div>
+                    </div>
                     <div class="terminal-toolbar">
                         <span class="term-title">&#128187; 服务日志</span>
                         <div style="display:flex; gap:4px;">
@@ -1744,6 +1930,16 @@
                     <div id="modelInfoContainer">
                         <div style="font-size:0.78em; color:var(--text-dim);">加载中...</div>
                     </div>
+
+                    <div class="section-title" style="margin-top:16px;">&#128214; 知识库 / 云端记忆</div>
+                    <div id="demoShowcaseContainer">
+                        <div style="font-size:0.78em; color:var(--text-dim);">加载中...</div>
+                    </div>
+
+                    <div class="section-title" style="margin-top:16px;">&#128736; 代码结构图</div>
+                    <div id="codeGraphContainer">
+                        <div style="font-size:0.78em; color:var(--text-dim);">加载中...</div>
+                    </div>
                 </div>
 
                 <!-- TAB 4: Settings -->
@@ -1758,16 +1954,18 @@
                             <option value="bicep_curl">哑铃弯举</option>
                         </select>
                     </div>
-                    <!-- T2: 疲劳上限（语音可改 / UI 可改，双向同步）-->
-                    <!-- V6.1: 疲劳上限 + 推理模式 + 动作切换 全部改为语音硬编码 -->
-                    <!-- 语音: "疲劳上限改为1800" / "纯视觉" / "视觉加传感" / "切换到深蹲/弯举" -->
                     <div class="form-group">
-                        <label class="form-label" style="color:var(--text-muted);font-size:0.7em;">💡 模式 / 阈值 请用语音硬编码控制</label>
-                        <div style="font-size:0.65em; color:var(--text-dim); padding:4px 6px; background:rgba(255,255,255,0.04); border-radius:4px; line-height:1.5;">
-                            · 疲劳上限: 喊"教练，疲劳上限改为X"<br>
-                            · 推理模式: 喊"教练，纯视觉/视觉加传感"<br>
-                            · 动作切换: 喊"教练，切换到深蹲/弯举"<br>
-                            · 当前状态见顶部模式条
+                        <label class="form-label">融合模式</label>
+                        <div class="seg-control" id="inferenceModeControl">
+                            <button id="btnPureVision" onclick="switchInferenceMode('pure_vision')" type="button">纯视觉</button>
+                            <button id="btnVisionSensor" onclick="switchInferenceMode('vision_sensor')" type="button">视觉+传感</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">疲劳上限</label>
+                        <div style="display:flex; gap:6px;">
+                            <input class="form-input" id="cfgFatigueLimit" type="number" min="100" max="10000" value="1500">
+                            <button class="term-btn" onclick="setFatigueLimit()" type="button" style="min-width:58px;">保存</button>
                         </div>
                     </div>
                     <div class="form-group">
@@ -1995,10 +2193,12 @@ const SVC_CN = {
     emg: 'EMG 采集',
     voice: '语音守护',
 };
+const SVC_ORDER = ['vision', 'streamer', 'fsm', 'emg', 'voice'];
 
 // ===== Global State =====
 let connectionAlive = true;
 let isMuted = false;
+let ttsVolume = 7;
 let visionMode = 'cloud';
 let timerStarted = false;
 let timerStartTime = null;
@@ -2007,6 +2207,9 @@ let logAutoScroll = true;
 let lastReply = '';
 let lastChatReplyTs = 0;
 let lastChatInputTs = 0;
+let lastChatEventSeq = 0;
+let chatEventsOnline = false;
+let seenChatEventSeq = {};
 let lastDraft = '';
 let sidebarVisible = true;
 
@@ -2020,7 +2223,8 @@ function switchTab(tabId) {
     if (panel) panel.classList.add('active');
 
     // Lazy load data for tabs
-    if (tabId === 'data') { loadTrainingData(); loadTrainingHistory(); loadModelInfo(); }
+    if (tabId === 'data') { loadTrainingData(); loadTrainingHistory(); loadModelInfo(); loadDemoShowcase(); loadCodeGraph(); }
+    if (tabId === 'logs') { loadDebugWorkbench(); }
     if (tabId === 'console') { loadSystemInfo(); loadServices(); }
 }
 
@@ -2058,15 +2262,23 @@ function selectExercise(ex) {
         if (fl) fl.textContent = '违规半蹲';
         if (al) al.textContent = '角度';
     }
-    fetch('/api/user_profile', {
+    fetch('/api/exercise_mode', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({exercise: ex})
+        body: JSON.stringify({mode: ex, src: 'main_ui'})
+    }).then(function(r) {
+        return r.json().catch(function(){ return {}; });
+    }).then(function(d) {
+        if (d && d.ok && typeof showToast === 'function') {
+            showToast('训练动作', ex === 'bicep_curl' ? '已切换到哑铃弯举' : '已切换到深蹲', false);
+        }
     }).catch(function() {});
     fetch('/reset_session', { method: 'POST' }).catch(function() {});
 }
 
 // ===== Vision Mode =====
+// V7.36: poll /api/cloud_handshake_status until phase=ready/failed (max 6s)
+// instead of fake 1500ms success. No automatic fallback (user request).
 async function switchVision(mode) {
     visionMode = mode;
     var sbMode = document.getElementById('sbMode');
@@ -2075,7 +2287,8 @@ async function switchVision(mode) {
     if (sel) { sel.value = mode; sel.disabled = true; }
     var tag = document.getElementById('tagVision');
     if (tag) tag.textContent = mode === 'cloud' ? '云端' : '本地';
-    showToast('视觉切换中', '正在切换到 ' + mode + '...', false);
+    var label = mode === 'cloud' ? '云端' : '本地';
+    showToast('视觉切换中', '正在切换到 ' + label + '…', false);
     try {
         await fetch('/api/switch_vision', {
             method: 'POST',
@@ -2083,22 +2296,38 @@ async function switchVision(mode) {
             body: JSON.stringify({mode: mode})
         });
     } catch(e) {}
-    setTimeout(async function() {
+    // Poll handshake status (every 400ms, max 6s).
+    var startTs = Date.now();
+    var poller = setInterval(async function() {
         try {
-            var r = await fetch('/api/vision_mode', {cache:'no-store'});
+            var r = await fetch('/api/cloud_handshake_status', {cache:'no-store'});
             var d = await r.json();
-            showToast('视觉模式', '已切换到 ' + (d.mode || mode), false);
-        } catch(e) { showToast('视觉模式', '切换完成', false); }
-        if (sel) sel.disabled = false;
-    }, 1500);
+            if (d.phase === 'ready' && d.backend === mode) {
+                clearInterval(poller);
+                showToast('视觉模式', '已切换到 ' + label, false);
+                if (sel) sel.disabled = false;
+                return;
+            }
+            if (d.phase === 'failed') {
+                clearInterval(poller);
+                showToast('切换失败', d.detail || '云端未响应', true);
+                if (sel) sel.disabled = false;
+                return;
+            }
+        } catch(e) {}
+        if (Date.now() - startTs > 6000) {
+            clearInterval(poller);
+            showToast('切换中', '云端 6s 内未就绪（不会自动回退）', true);
+            if (sel) sel.disabled = false;
+        }
+    }, 400);
 }
 
 // ===== Inference Mode =====
 var inferenceMode = 'pure_vision';
 
-function switchInferenceMode(mode) {
+function setInferenceModeUi(mode) {
     inferenceMode = mode;
-    // Update AI gauge label
     var nnLabel = document.getElementById('nnLabel');
     var nnText = document.getElementById('nnText');
     if (mode === 'pure_vision') {
@@ -2112,10 +2341,24 @@ function switchInferenceMode(mode) {
     if (sel) sel.value = mode;
     var chip = document.getElementById('tagInferenceMode');
     if (chip) chip.textContent = (mode === 'vision_sensor') ? '视觉+传感' : '纯视觉';
+    var pure = document.getElementById('btnPureVision');
+    var sensor = document.getElementById('btnVisionSensor');
+    if (pure) pure.classList.toggle('active', mode === 'pure_vision');
+    if (sensor) sensor.classList.toggle('active', mode === 'vision_sensor');
+}
+
+function switchInferenceMode(mode) {
+    setInferenceModeUi(mode);
     fetch('/api/switch_inference_mode', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({mode: mode})
+        body: JSON.stringify({mode: mode, src: 'main_ui'})
+    }).then(function(r) {
+        return r.json().catch(function(){ return {}; });
+    }).then(function(d) {
+        if (d && d.ok && typeof showToast === 'function') {
+            showToast('融合模式', mode === 'vision_sensor' ? '已切换到视觉+传感' : '已切换到纯视觉', false);
+        }
     }).catch(function() {});
 }
 
@@ -2127,18 +2370,8 @@ setInterval(function() {
         .then(function(r) { return r.json(); })
         .then(function(d) {
             if (!d || !d.mode) return;
-            var chip = document.getElementById('tagInferenceMode');
-            if (chip) chip.textContent = (d.mode === 'vision_sensor') ? '视觉+传感' : '纯视觉';
-            var sel = document.getElementById('cfgInferenceMode');
-            if (sel && sel.value !== d.mode) sel.value = d.mode;
             if (inferenceMode !== d.mode) {
-                inferenceMode = d.mode;
-                var nnLabel = document.getElementById('nnLabel');
-                var nnText = document.getElementById('nnText');
-                if (d.mode === 'pure_vision') {
-                    if (nnLabel) nnLabel.textContent = '角度判定';
-                    if (nnText) nnText.textContent = 'IF';
-                }
+                setInferenceModeUi(d.mode);
             }
         })
         .catch(function() {});
@@ -2159,7 +2392,37 @@ function toggleMute() {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
         body: JSON.stringify({muted: isMuted})
+    }).then(function(r) {
+        return r.json().catch(function(){ return {}; });
+    }).then(function(d) {
+        if (typeof showToast === 'function') {
+            if (isMuted) {
+                showToast('已静音', '当前播报已停止');
+            } else if (d && d.replay_requested) {
+                showToast('已恢复', '正在恢复或补播最近一条语音');
+            } else {
+                showToast('已恢复', '下一条播报将正常有声');
+            }
+        }
     }).catch(() => {});
+}
+
+let volumePostTimer = null;
+function setTtsVolume(value) {
+    const vol = Math.max(1, Math.min(15, parseInt(value, 10) || 7));
+    ttsVolume = vol;
+    const slider = document.getElementById('volumeSlider');
+    const label = document.getElementById('volumeValue');
+    if (slider && parseInt(slider.value, 10) !== vol) slider.value = String(vol);
+    if (label) label.textContent = String(vol);
+    clearTimeout(volumePostTimer);
+    volumePostTimer = setTimeout(function() {
+        fetch('/api/tts_volume', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({vol: vol})
+        }).catch(() => {});
+    }, 120);
 }
 
 // T2: save fatigue limit (writes both actuation + display signals via streamer)
@@ -2249,6 +2512,12 @@ function escapeHtml(str) {
     return d.innerHTML;
 }
 
+function fmtMaybeNumber(v, suffix) {
+    if (typeof v === 'number' && isFinite(v)) return v.toFixed(1) + (suffix || '');
+    if (v !== undefined && v !== null && v !== '') return String(v);
+    return '--';
+}
+
 // ===== Reset / Trigger =====
 async function resetSession() {
     if (!confirm('确认清零本组训练数据?')) return;
@@ -2257,6 +2526,8 @@ async function resetSession() {
     try {
         await fetch('/reset_session', { method: 'POST' });
         lastReply = '';
+        lastChatEventSeq = 0;
+        seenChatEventSeq = {};
         document.getElementById('chatArea').innerHTML =
             '<div class="chat-placeholder" id="chatPlaceholder">数据已重置，开始新一组训练</div>';
     } catch(e) {}
@@ -2742,37 +3013,47 @@ function showToast(title, desc, isError) {
 }
 
 // ===== Admin: Services =====
+function renderServiceStatus(services, boardOnline, fallbackText) {
+    const container = document.getElementById('serviceList');
+    const centerC = document.getElementById('serviceListCenter');
+    const sbBoard = document.getElementById('sbBoard');
+    let html = '';
+    let miniHtml = '';
+    if (sbBoard) {
+        sbBoard.textContent = boardOnline ? '在线' : '离线';
+        sbBoard.style.color = boardOnline ? 'var(--accent-green)' : 'var(--accent-red)';
+    }
+    SVC_ORDER.forEach(function(name) {
+        const info = (services && services[name]) || {};
+        const running = !!info.running;
+        const dotCls = running ? 'on' : 'off';
+        const label = SVC_CN[name] || name;
+        const pidText = running ? ('PID ' + (info.pid || '--')) : (info.status || info.error || fallbackText || '未运行');
+        html += '<div class="svc-card"><div class="svc-dot ' + dotCls + '"></div><div class="svc-name">' + label + '</div><div class="svc-pid">' + escapeHtml(pidText) + '</div></div>';
+        miniHtml += '<div class="svc-mini"><span class="svc-mini-dot ' + dotCls + '"></span><span class="svc-mini-name">' + label + '</span></div>';
+    });
+    if (container) container.innerHTML = html;
+    if (centerC) centerC.innerHTML = miniHtml;
+}
+
+function markServicesOffline(label) {
+    renderServiceStatus({}, false, label || '未运行');
+    const st = document.getElementById('infoBoardStatus');
+    if (st) { st.textContent = '离线'; st.style.color = 'var(--accent-red)'; }
+}
+
 async function loadServices() {
     try {
         const res = await fetch('/api/admin/services', { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = await res.json();
-        const container = document.getElementById('serviceList');
-        const centerC = document.getElementById('serviceListCenter');
-        let html = '';
-        let miniHtml = '';
-        const boardOnline = data.board_online;
-        const sbBoard = document.getElementById('sbBoard');
-
-        if (!boardOnline) {
-            if (sbBoard) { sbBoard.textContent = '离线'; sbBoard.style.color = 'var(--accent-red)'; }
-            for (const name of Object.keys(SVC_CN)) {
-                html += '<div class="svc-card"><div class="svc-dot off"></div><div class="svc-name">' + SVC_CN[name] + '</div><div class="svc-pid">板端离线</div></div>';
-                miniHtml += '<div class="svc-mini"><span class="svc-mini-dot off"></span><span class="svc-mini-name">' + SVC_CN[name] + '</span></div>';
-            }
-        } else {
-            if (sbBoard) { sbBoard.textContent = '在线'; sbBoard.style.color = 'var(--accent-green)'; }
-            for (const [name, info] of Object.entries(data.services || {})) {
-                const running = info.running;
-                const dotCls = running ? 'on' : 'off';
-                const pidText = running ? 'PID ' + info.pid : '未运行';
-                html += '<div class="svc-card"><div class="svc-dot ' + dotCls + '"></div><div class="svc-name">' + (SVC_CN[name] || name) + '</div><div class="svc-pid">' + pidText + '</div></div>';
-                miniHtml += '<div class="svc-mini"><span class="svc-mini-dot ' + dotCls + '"></span><span class="svc-mini-name">' + (SVC_CN[name] || name) + '</span></div>';
-            }
+        if (!res.ok) {
+            markServicesOffline('状态不可达');
+            return;
         }
-        if (container) container.innerHTML = html;
-        if (centerC) centerC.innerHTML = miniHtml;
-    } catch(e) {}
+        const data = await res.json();
+        renderServiceStatus(data.services || {}, !!data.board_online, data.board_online ? '未运行' : '板端离线');
+    } catch(e) {
+        markServicesOffline('连接中断');
+    }
 }
 
 async function adminStart() {
@@ -2810,12 +3091,17 @@ async function adminStop() {
     const btn = document.getElementById('btnStopAll');
     btn.disabled = true; btn.textContent = '停止中...';
     const out = document.getElementById('adminOutput');
-    // Immediate visual feedback: mark all services as stopping
-    const container = document.getElementById('serviceList');
-    if (container) {
-        container.querySelectorAll('.svc-dot').forEach(function(d) { d.className = 'svc-dot off'; });
-        container.querySelectorAll('.svc-pid').forEach(function(d) { d.textContent = '停止中...'; });
-    }
+    out.textContent = '正在停止训练服务，网页控制台会保留运行...\n';
+    // Immediate visual feedback: mark all services as stopping before the
+    // response returns. This keeps the recording UI honest even if networking
+    // drops during shutdown.
+    renderServiceStatus({
+        vision: {running:false, status:'停止中...'},
+        streamer: {running:true, pid:'控制台'},
+        fsm: {running:false, status:'停止中...'},
+        emg: {running:false, status:'停止中...'},
+        voice: {running:false, status:'停止中...'}
+    }, true, '停止中...');
     try {
         const res = await fetch('/api/admin/stop', {
             method: 'POST',
@@ -2833,6 +3119,7 @@ async function adminStop() {
         showToast('已停止', '', false);
     } catch(e) {
         out.textContent = '请求失败: ' + e;
+        markServicesOffline('连接中断');
     }
     // Clear residual frontend state (EMG history, chat, stat counters)
     try {
@@ -2897,7 +3184,11 @@ async function loadSystemInfo() {
                 document.getElementById('infoGpu').style.color = sys.cloud_gpu.online ? 'var(--accent-green)' : 'var(--accent-red)';
             }
         }
-    } catch(e) {}
+    } catch(e) {
+        _setText('infoBoardStatus', '离线');
+        var st = document.getElementById('infoBoardStatus');
+        if (st) st.style.color = 'var(--accent-red)';
+    }
 }
 
 function _setText(id, val) {
@@ -3022,6 +3313,87 @@ async function loadModelInfo() {
     } catch(e) {}
 }
 
+async function loadDebugWorkbench() {
+    const container = document.getElementById('debugWorkbenchInfo');
+    if (!container) return;
+    try {
+        const res = await fetch('/api/demo/debug_workbench', { cache: 'no-store' });
+        const data = await res.json();
+        const link = document.getElementById('operatorConsoleLink');
+        if (link && data.operator_console_url) link.href = data.operator_console_url;
+        let lines = [];
+        lines.push('最近 run: ' + (data.latest_run || '暂无'));
+        if (data.summary_path) lines.push('summary: ' + data.summary_path);
+        if (data.events_path) lines.push('events: ' + data.events_path);
+        if (data.features && data.features.length) lines.push('能力: ' + data.features.join(' / '));
+        container.innerHTML = escapeHtml(lines.join('\n')).replace(/\n/g, '<br>');
+    } catch(e) {
+        container.textContent = '调试台状态读取失败';
+    }
+}
+
+async function loadDemoShowcase() {
+    const container = document.getElementById('demoShowcaseContainer');
+    if (!container) return;
+    try {
+        const ragRes = await fetch('/api/demo/rag_status?query=' + encodeURIComponent('怎么使用你'), { cache: 'no-store' });
+        const rag = await ragRes.json();
+        const cloudRes = await fetch('/api/demo/opencloud_records', { cache: 'no-store' });
+        const cloud = await cloudRes.json();
+        const hits = rag.hits || [];
+        const status = cloud.status || {};
+        const records = cloud.records || {};
+        let html = '<div class="workbench-card">';
+        html += '<div class="workbench-head"><div class="workbench-title">RAG 命中展示</div><div class="workbench-meta">' + escapeHtml((rag.kb && rag.kb.count !== undefined) ? (rag.kb.count + ' 条知识') : '知识库') + '</div></div>';
+        html += '<div class="workbench-meta">' + escapeHtml((rag.manual_reply || '').slice(0, 150) || '暂无固定回复') + '</div>';
+        html += '<div class="demo-list">';
+        hits.slice(0, 3).forEach(function(h) {
+            html += '<div class="demo-row"><span>' + escapeHtml(h.source || h.file || 'knowledge') + '</span><span>' + escapeHtml((h.title || h.text || '').slice(0, 72)) + '</span></div>';
+        });
+        if (!hits.length) html += '<div class="demo-row"><span>命中</span><span>暂无</span></div>';
+        html += '</div></div>';
+        html += '<div class="workbench-card">';
+        html += '<div class="workbench-head"><div class="workbench-title">OpenCloud 真实记录</div><div class="workbench-meta">' + escapeHtml(status.presentation_name || 'OpenCloud/OpenClaw') + '</div></div>';
+        html += '<div class="demo-list">';
+        html += '<div class="demo-row"><span>runtime</span><span>' + escapeHtml(status.primary_runtime || '--') + '</span></div>';
+        html += '<div class="demo-row"><span>local process</span><span>' + escapeHtml(status.local_process_running ? 'running' : 'offline/unknown') + '</span></div>';
+        Object.keys(records).forEach(function(k) {
+            html += '<div class="demo-row"><span>' + escapeHtml(k) + '</span><span>' + ((records[k] || []).length || '暂无真实记录') + '</span></div>';
+        });
+        if (cloud.empty_message) html += '<div class="demo-row"><span>records</span><span>' + escapeHtml(cloud.empty_message) + '</span></div>';
+        html += '</div></div>';
+        container.innerHTML = html;
+    } catch(e) {
+        container.innerHTML = '<div class="workbench-card"><div class="workbench-meta">知识库 / 云端记忆读取失败</div></div>';
+    }
+}
+
+async function loadCodeGraph() {
+    const container = document.getElementById('codeGraphContainer');
+    if (!container) return;
+    try {
+        const res = await fetch('/api/demo/code_graph', { cache: 'no-store' });
+        const data = await res.json();
+        let html = '<div class="workbench-card">';
+        html += '<div class="workbench-head"><div class="workbench-title">只读结构图</div><div class="workbench-meta">' + escapeHtml(data.library_hint || 'graph') + '</div></div>';
+        html += '<div class="code-graph">';
+        (data.nodes || []).forEach(function(n) {
+            const d = n.data || {};
+            html += '<div class="graph-node">' + escapeHtml(d.label || d.id || '--') + '<span class="kind">' + escapeHtml(d.kind || '') + '</span></div>';
+        });
+        html += '</div>';
+        html += '<div class="graph-edge">';
+        (data.edges || []).slice(0, 12).forEach(function(e) {
+            const d = e.data || {};
+            html += escapeHtml((d.source || '?') + ' -> ' + (d.target || '?') + ' · ' + (d.label || '')) + '<br>';
+        });
+        html += '</div></div>';
+        container.innerHTML = html;
+    } catch(e) {
+        container.innerHTML = '<div class="workbench-card"><div class="workbench-meta">代码结构图读取失败</div></div>';
+    }
+}
+
 
 // ========================================================
 // REAL-TIME POLLING (Web Worker)
@@ -3093,6 +3465,15 @@ syncWorker.onmessage = function(e) {
         _renderStatsFromDisplay();
         _setText('hudAngle', d.angle > 0 ? d.angle + '\u00B0' : '--');
         _setText('romCenterAngle', d.angle > 0 ? d.angle + '\u00B0' : '0\u00B0');
+
+        if (d.angle_diag) {
+            _setText('diagRawAngle', fmtMaybeNumber(d.angle_diag.raw_angle, '\u00B0'));
+            _setText('diagSmoothAngle', fmtMaybeNumber(d.angle_diag.smooth_angle, '\u00B0'));
+            _setText('diagDecisionAngle', fmtMaybeNumber(d.angle_diag.decision_angle, '\u00B0'));
+            _setText('diagKptConf', fmtMaybeNumber(d.angle_diag.kpt_conf, ''));
+            _setText('diagPoseFps', fmtMaybeNumber(d.angle_diag.fps, ''));
+            _setText('diagAngleSource', d.angle_diag.source || d.angle_diag.exercise || '--');
+        }
 
         // ROM gauge
         let ampPct = 0;
@@ -3178,6 +3559,16 @@ syncWorker.onmessage = function(e) {
                     else { mb.classList.remove('active-red'); mb.innerHTML = '\ud83d\udd0a'; }
                     isMuted = d.muted;
                 }
+            }
+        }
+        if (typeof d.tts_volume === 'number') {
+            const serverVol = Math.max(1, Math.min(15, parseInt(d.tts_volume, 10) || 7));
+            const vs = document.getElementById('volumeSlider');
+            const vv = document.getElementById('volumeValue');
+            if (serverVol !== ttsVolume && document.activeElement !== vs) {
+                ttsVolume = serverVol;
+                if (vs) vs.value = String(serverVol);
+                if (vv) vv.textContent = String(serverVol);
             }
         }
 
@@ -3473,7 +3864,7 @@ function updateRig(angle, exercise, fatigue, good, failed, fatigueLimit, comp) {
     var fpsStart = Date.now();
 
     // Build stream URL: same host, port 8080
-    var host = window.location.hostname || '10.18.76.224';
+    var host = window.location.hostname || '10.244.190.224';
     var directUrl = 'http://' + host + ':8080/stream';
     var fallbackUrl = '/video_feed';
     var useDirectStream = true;
@@ -3537,6 +3928,7 @@ function appendDsHistory(reply) {
     return;
 }
 setInterval(async () => {
+    if (chatEventsOnline) return;
     try {
         const res = await fetch('/llm_reply_feed', { cache: 'no-store' });
         if (!res.ok) return;
@@ -3555,13 +3947,66 @@ setInterval(async () => {
     } catch(e) {}
 }, 2000);
 
-// V7.7: 合并 chat_reply / chat_input 按 mtime 排序 append, 修复气泡顺序倒置
-// V7.30 S1: 同一 turn 内多次 STT 更新只刷新已有气泡, 避免重复气泡
+function appendChatEventBubble(ev) {
+    const seq = Number(ev.seq || 0);
+    if (!seq || seenChatEventSeq[seq]) return;
+    seenChatEventSeq[seq] = true;
+    const text = (ev.text || '').trim();
+    if (!text) return;
+    lastDraft = '';
+    const dn = document.getElementById('draftBubble');
+    if (dn) dn.remove();
+    const role = ev.role === 'user' ? '我' : '教练';
+    const type = ev.role === 'user' ? 'user' : 'bot';
+    appendChatBubble(role, text, type);
+    if (ev.role !== 'user') {
+        lastReply = text;
+        if (ev.kind === 'auto_summary' || ev.kind === 'auto_summary_pending' || ev.kind === 'auto_summary_skipped') {
+            const btn = document.getElementById('btnSumm');
+            if (btn) { btn.disabled = false; btn.innerHTML = '&#128221; 生成点评'; btn.style.opacity = '1'; }
+            if (deepseekTimeoutId) { clearTimeout(deepseekTimeoutId); deepseekTimeoutId = null; }
+            if (!dsHistorySeen[text]) {
+                dsHistorySeen[text] = true;
+                appendDsHistory(text);
+            }
+        }
+    }
+}
+
+setInterval(async () => {
+    try {
+        const res = await fetch('/api/chat_events?since=' + encodeURIComponent(lastChatEventSeq), { cache: 'no-store' });
+        if (!res.ok) {
+            chatEventsOnline = false;
+            return;
+        }
+        const d = await res.json();
+        if (!d || d.ok === false) {
+            chatEventsOnline = false;
+            return;
+        }
+        chatEventsOnline = true;
+        const events = Array.isArray(d.events) ? d.events : [];
+        events.sort((a, b) => Number(a.seq || 0) - Number(b.seq || 0));
+        events.forEach(ev => {
+            appendChatEventBubble(ev);
+            const seq = Number(ev.seq || 0);
+            if (seq > lastChatEventSeq) lastChatEventSeq = seq;
+        });
+        const latest = Number(d.latest_seq || 0);
+        if (latest > lastChatEventSeq) lastChatEventSeq = latest;
+    } catch(e) {
+        chatEventsOnline = false;
+    }
+}, 700);
+
+// Legacy fallback only if /api/chat_events is unavailable.
 let lastTurnId = '';
 let currentUserBubble = null;
 let currentReplyBubble = null;
 
 setInterval(async () => {
+    if (chatEventsOnline) return;
     let inputTurnId = '', inputText = '';
     let replyTurnId = '', replyText = '';
     try {
@@ -3987,7 +4432,7 @@ setInterval(function() {
                 if (feed) { feed.style.display = ''; }
                 if (tag) tag.style.display = 'none';
                 // Reconnect video stream (force reconnect after HDMI unplug)
-                var host = window.location.hostname || '10.18.76.224';
+                var host = window.location.hostname || '10.244.190.224';
                 if (feed) {
                     feed.src = '';
                     setTimeout(function() {
@@ -4047,9 +4492,7 @@ setInterval(function(){
     }).catch(function() {});
     fetch('/api/inference_mode', { cache: 'no-store' }).then(function(r) { return r.json(); }).then(function(d) {
         if (d.mode) {
-            // V6.1: \u4ec5\u663e\u793a\u5230\u9876\u90e8 tag, \u4e0d\u518d\u5199\u56de select (\u5df2\u5220\u9664)
-            var chip = document.getElementById('tagInferenceMode');
-            if (chip) chip.textContent = (d.mode === 'vision_sensor') ? '\u89c6\u89c9+\u4f20\u611f' : '\u7eaf\u89c6\u89c9';
+            setInferenceModeUi(d.mode);
         }
     }).catch(function() {});
     updateHeaderTags();

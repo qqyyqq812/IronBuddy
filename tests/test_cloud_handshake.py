@@ -66,6 +66,20 @@ def test_default_status_path_is_shm():
     assert "/dev/shm/cloud_rtmpose_status.json" in src
 
 
+def test_frontend_switchVision_polls_handshake():
+    """Frontend must poll cloud_handshake_status, not setTimeout 1500."""
+    html = _read(INDEX_HTML)
+    # find switchVision body
+    idx = html.find("async function switchVision(")
+    assert idx != -1
+    body = html[idx:idx + 2500]
+    assert "/api/cloud_handshake_status" in body
+    # the old fake-success setTimeout 1500 must be gone
+    assert "}, 1500);" not in body
+    # graceful timeout messaging present
+    assert "6000" in body or "6 s" in body or "6s" in body
+
+
 # ---------- Helper logic checks ----------
 
 def test_helper_returns_payload(tmp_path):
