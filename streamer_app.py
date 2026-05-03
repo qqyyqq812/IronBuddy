@@ -2092,10 +2092,43 @@ def _tail_file(path, max_lines=20):
         return []
 
 
+def _openclaw_schedule():
+    """Read schedule env vars (matches opencloud_reminder_daemon._should_fire)."""
+    return {
+        "weekly_hour": int(os.environ.get("IRONBUDDY_WEEKLY_HOUR", "20")),
+        "weekly_dow": int(os.environ.get("IRONBUDDY_WEEKLY_DOW", "6")),
+        "morning_hour": int(os.environ.get("IRONBUDDY_MORNING_HOUR", "9")),
+        "evening_hour": int(os.environ.get("IRONBUDDY_EVENING_HOUR", "21")),
+    }
+
+
+def _openclaw_next_push(schedule, now=None):
+    """Predict next push event by walking forward up to 8 days. Stdlib only."""
+    import datetime as _dt
+    base = now or _dt.datetime.now()
+    candidates = []
+    for offset in range(0, 8 * 24):
+        cand = base + _dt.timedelta(hours=offset)
+        cand = cand.replace(minute=0, second=0, microsecond=0)
+        if cand <= base:
+            continue
+        if cand.hour == schedule["morning_hour"]:
+            candidates.append(("morning", cand))
+        if cand.hour == schedule["evening_hour"]:
+            candidates.append(("evening", cand))
+        if cand.weekday() == schedule["weekly_dow"] and cand.hour == schedule["weekly_hour"]:
+            candidates.append(("weekly", cand))
+    if not candidates:
+        return None, None
+    candidates.sort(key=lambda x: x[1])
+    mode, when = candidates[0]
+    return mode, when.timestamp()
+
+
 @app.route('/api/opencloud/status', methods=['GET'])
 @app.route('/api/openclaw/status', methods=['GET'])
 def opencloud_status():
-    """Read-only OpenClaw cloud reminder status. Never returns secret values."""
+    """Read-only OpenClaw reminder status. Never returns secret values."""
     cfg = _load_api_config()
     runtime_status_paths = [
         os.environ.get("OPENCLOUD_REMINDER_STATUS_PATH", ""),
@@ -2123,16 +2156,28 @@ def opencloud_status():
         "deepseek_api_key": bool(_pick_config(cfg, "DEEPSEEK_API_KEY", "deepseek_api_key")),
         "opencloud_board_url": bool(os.environ.get("IRONBUDDY_BOARD_URL")),
     }
+    schedule = _openclaw_schedule()
+    next_mode, next_ts = _openclaw_next_push(schedule)
     body = {
         "ok": True,
-        "presentation_name": "OpenClaw 云端提醒",
-        "primary_runtime": "opencloud",
-        "board_daemon": "fallback",
+        "presentation_name": "OpenClaw 后台提醒",
+        "primary_runtime": "board",
+        "board_daemon": "systemd_or_loop",
         "status_path": status_path_used,
         "runtime_status": runtime_status,
+        "daemon_running": bool(ok_proc and proc_out.strip()),
         "local_process_running": bool(ok_proc and proc_out.strip()),
         "local_processes": proc_out.splitlines()[:8] if proc_out else [],
         "configured": configured,
+        "weekly_hour": schedule["weekly_hour"],
+        "weekly_dow": schedule["weekly_dow"],
+        "morning_hour": schedule["morning_hour"],
+        "evening_hour": schedule["evening_hour"],
+        "next_push_mode": next_mode or "",
+        "next_push_ts": next_ts,
+        "last_push_ts": runtime_status.get("last_push_ts"),
+        "last_push_mode": runtime_status.get("mode"),
+        "last_push_ok": bool(runtime_status.get("ok")),
         "trigger_files": {
             "daily_plan": "/dev/shm/openclaw_trigger_daily_plan",
             "weekly_report": "/dev/shm/openclaw_trigger_weekly_report",
@@ -2144,6 +2189,79 @@ def opencloud_status():
         },
     }
     return Response(json.dumps(body, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/openclaw/once', methods=['POST'])
+def openclaw_once():
+    """Trigger one OpenClaw reminder run. Body: {mode, send}.
+
+    mode: morning | evening | weekly | auto
+    send: bool (default false → dry-run)
+    """
+    body = request.get_json(silent=True) or {}
+    mode = body.get("mode", "weekly")
+    if mode not in ("morning", "evening", "weekly", "auto"):
+        return Response(json.dumps({"ok": False, "error": "bad mode"}),
+                        mimetype='application/json'), 400
+    send = bool(body.get("send", False))
+    daemon_path = os.path.join(PROJECT_ROOT, "scripts",
+                               "opencloud_reminder_daemon.py")
+    args = ["python3", "-u", daemon_path, "--mode", mode, "--once"]
+    if send:
+        args.append("--send")
+    else:
+        args.append("--dry-run")
+    try:
+        proc = subprocess.run(args, capture_output=True, timeout=20,
+                              cwd=PROJECT_ROOT)
+        rc = proc.returncode
+        out = proc.stdout.decode("utf-8", "replace")
+        err = proc.stderr.decode("utf-8", "replace")
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json')
+    return Response(json.dumps({
+        "ok": rc == 0,
+        "mode": mode,
+        "send": send,
+        "rc": rc,
+        "stdout_tail": out[-1200:],
+        "stderr_tail": err[-500:],
+    }, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/openclaw/history', methods=['GET'])
+def openclaw_history():
+    """Return last N reminder runs from opencloud_reminder_history.jsonl."""
+    try:
+        n = int(request.args.get("n", "10"))
+    except Exception:
+        n = 10
+    n = max(1, min(n, 100))
+    history_path = os.path.join(PROJECT_ROOT, "data", "runtime",
+                                "opencloud_reminder_history.jsonl")
+    items = []
+    try:
+        if os.path.exists(history_path):
+            with open(history_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            for line in lines[-n:]:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    items.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json')
+    return Response(json.dumps({
+        "ok": True,
+        "history_path": history_path,
+        "count": len(items),
+        "items": items,
+    }, ensure_ascii=False), mimetype='application/json')
 
 
 def _read_active_system_prompt():

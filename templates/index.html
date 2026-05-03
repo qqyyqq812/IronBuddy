@@ -2120,6 +2120,31 @@
                     <button class="save-btn" onclick="saveApiConfig()">保存所有配置</button>
                     <div id="apiConfigStatus" style="color:var(--text-muted);font-size:11px;margin-top:4px;"></div>
 
+                    <!-- V7.37: OpenClaw 后台推送卡片 -->
+                    <div class="section-title" style="margin-top:16px;">🦞 OpenClaw 后台推送</div>
+                    <div class="workbench-card" id="openclawCard" style="margin-bottom:10px;">
+                        <div class="workbench-head">
+                            <div class="workbench-title" style="display:flex; align-items:center; gap:8px;">
+                                <span id="openclawDot" style="display:inline-block; width:8px; height:8px; border-radius:50%; background:#71717a;"></span>
+                                <span>定时归总训练数据反哺 RAG</span>
+                            </div>
+                            <div class="workbench-meta" id="openclawMeta">加载中…</div>
+                        </div>
+                        <div id="openclawStatusBody" style="font-size:0.78em; color:var(--text-default); line-height:1.7;">
+                            <div>daemon: <span id="openclawDaemonState">--</span></div>
+                            <div>上次推送: <span id="openclawLastPush">--</span></div>
+                            <div>下次预计: <span id="openclawNextPush">--</span></div>
+                        </div>
+                        <div style="display:flex; gap:6px; margin-top:8px; flex-wrap:wrap;">
+                            <button class="diag-btn" onclick="openclawTrigger('weekly', false)">验证周报 (dry-run)</button>
+                            <button class="diag-btn" onclick="openclawTrigger('weekly', true)">立即发周报</button>
+                            <button class="diag-btn" onclick="openclawTrigger('morning', true)">立即发早间</button>
+                            <button class="diag-btn" onclick="openclawLoadHistory()">查看最近 5 条</button>
+                        </div>
+                        <div id="openclawTriggerResult" style="font-size:0.72em; color:var(--text-dim); margin-top:6px;"></div>
+                        <div id="openclawHistoryBody" style="font-size:0.72em; color:var(--text-muted); margin-top:6px; max-height:140px; overflow-y:auto;"></div>
+                    </div>
+
                     <!-- 测试与诊断 -->
                     <div class="section-title" style="margin-top:16px;">🧪 测试与诊断</div>
 
@@ -2319,6 +2344,84 @@ function switchTab(tabId) {
     if (tabId === 'data') { loadTrainingData(); loadTrainingHistory(); loadModelInfo(); }
     if (tabId === 'logs') { loadDebugWorkbench(); if (typeof loadCodeGraph === 'function') loadCodeGraph(); }
     if (tabId === 'console') { loadSystemInfo(); loadServices(); }
+    if (tabId === 'settings') { loadOpenclawStatus(); }
+}
+
+// V7.37: OpenClaw status + trigger
+function _formatTs(tsSec) {
+    if (!tsSec) return '--';
+    var d = new Date(Number(tsSec) * 1000);
+    if (isNaN(d.getTime())) return '--';
+    var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+        ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+async function loadOpenclawStatus() {
+    var meta = document.getElementById('openclawMeta');
+    var dot = document.getElementById('openclawDot');
+    var dstate = document.getElementById('openclawDaemonState');
+    var last = document.getElementById('openclawLastPush');
+    var next = document.getElementById('openclawNextPush');
+    if (!meta) return;
+    try {
+        var r = await fetch('/api/openclaw/status', {cache:'no-store'});
+        var d = await r.json();
+        var running = !!d.daemon_running;
+        if (dot) dot.style.background = running ? '#4ade80' : '#71717a';
+        if (dstate) dstate.textContent = running ? '运行中 (PID ' + ((d.local_processes||[''])[0].split(/\s+/)[0] || '?') + ')' : '未启动';
+        if (last) last.textContent = (d.last_push_mode || '?') + ' · ' + _formatTs(d.last_push_ts) + (d.last_push_ok ? ' ✓' : '');
+        if (next) next.textContent = (d.next_push_mode || '?') + ' · ' + _formatTs(d.next_push_ts);
+        if (meta) meta.textContent = '配置: ' + (d.configured && d.configured.feishu_app_id ? '飞书 ✓ ' : '飞书 ✗ ') +
+            'Schedule: 周' + (d.weekly_dow === 6 ? '日' : d.weekly_dow) + ' ' + d.weekly_hour + ':00 / 早 ' + d.morning_hour + ':00';
+    } catch(e) {
+        if (meta) meta.textContent = '加载失败: ' + e.message;
+    }
+}
+
+async function openclawTrigger(mode, send) {
+    var s = document.getElementById('openclawTriggerResult');
+    if (s) s.textContent = (send ? '发送' : '验证') + 'ing…';
+    try {
+        var r = await fetch('/api/openclaw/once', {
+            method: 'POST',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({mode: mode, send: !!send})
+        });
+        var d = await r.json();
+        if (s) {
+            if (d.ok) {
+                s.textContent = (send ? '已发送' : '验证完成') + ' · ' + mode;
+                s.style.color = 'var(--accent-green, #4ade80)';
+            } else {
+                s.textContent = '失败: ' + (d.error || (d.stderr_tail || '').slice(-160));
+                s.style.color = 'var(--accent-red, #ef4444)';
+            }
+        }
+        setTimeout(loadOpenclawStatus, 1200);
+    } catch(e) {
+        if (s) { s.textContent = '失败: ' + e.message; s.style.color = 'var(--accent-red, #ef4444)'; }
+    }
+}
+
+async function openclawLoadHistory() {
+    var body = document.getElementById('openclawHistoryBody');
+    if (!body) return;
+    body.innerHTML = '加载中…';
+    try {
+        var r = await fetch('/api/openclaw/history?n=5', {cache:'no-store'});
+        var d = await r.json();
+        var items = d.items || [];
+        if (!items.length) { body.innerHTML = '暂无真实记录'; return; }
+        var html = '';
+        items.slice().reverse().forEach(function(it) {
+            html += '<div>' + _formatTs(it.last_push_ts) + ' · ' + (it.mode || '?') + ' · ' +
+                (it.dry_run ? 'dry' : 'send') + ' · ' + (it.ok ? '✓' : '✗') + '</div>';
+        });
+        body.innerHTML = html;
+    } catch(e) {
+        body.textContent = '失败: ' + e.message;
+    }
 }
 
 // ===== Sidebar Toggle =====
