@@ -3537,9 +3537,41 @@ function onFeedbackFileChosen(e) {
 }
 
 async function submitFeedback() {
-    // Stage 6 will implement real submit to operator console api/action + api/upload
     var s = document.getElementById('feedbackStatus');
-    if (s) s.textContent = '阶段 6 实现';
+    var noteEl = document.getElementById('feedbackNote');
+    var note = (noteEl && noteEl.value || '').trim();
+    if (!note && !_feedbackImageData) {
+        if (s) s.textContent = '请填写备注或选择截图';
+        return;
+    }
+    if (s) s.textContent = '保存中…';
+    var operatorBase = 'http://127.0.0.1:8765';
+    try {
+        // 1) note → operator console /api/action (action="monitor")
+        if (note) {
+            await fetch(operatorBase + '/api/action', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({action: 'monitor', note: '主网页反馈: ' + note})
+            });
+        }
+        // 2) screenshot → operator console /api/upload (multipart form)
+        if (_feedbackImageData) {
+            var blob = await (await fetch(_feedbackImageData)).blob();
+            var fd = new FormData();
+            fd.append('file', blob, 'feedback_' + Date.now() + '.png');
+            fd.append('note', note || '主网页粘贴截图');
+            await fetch(operatorBase + '/api/upload', {method:'POST', body: fd});
+        }
+        if (s) s.textContent = '已保存 ✓';
+        if (noteEl) noteEl.value = '';
+        var preview = document.getElementById('feedbackImagePreview');
+        if (preview) preview.innerHTML = '';
+        _feedbackImageData = null;
+        setTimeout(function(){ if (s) s.textContent = ''; }, 4000);
+    } catch(e) {
+        if (s) s.textContent = '失败: ' + (e.message || '未知');
+    }
 }
 
 

@@ -66,3 +66,16 @@ def test_streamer_has_code_graph_endpoint():
     assert "@app.route('/api/code_graph')" in src
     assert "data/code_graph/graph.json" in src
     assert "IRONBUDDY_CODE_GRAPH_PATH" in src
+
+
+def test_submit_feedback_no_longer_placeholder():
+    """Stage 6: real submitFeedback wires to operator console."""
+    src = _read()
+    assert "阶段 6 实现" not in src
+    # Either inline or via operatorBase variable
+    has_action = "127.0.0.1:8765/api/action" in src or \
+                 ("/api/action" in src and "127.0.0.1:8765" in src)
+    has_upload = "127.0.0.1:8765/api/upload" in src or \
+                 ("/api/upload" in src and "127.0.0.1:8765" in src)
+    assert has_action, "submitFeedback must POST to operator /api/action"
+    assert has_upload, "submitFeedback must POST to operator /api/upload"
