@@ -192,6 +192,18 @@ Claude Code 或人工复盘窗口先读这里，再进入具体 run 目录。
   当前全服务在线：vision `22321`、streamer `29949`、fsm `22511`、
   emg `22775`、voice `31157`；`/api/admin/voice_diag` 显示
   `voice_boot_status.status=queued`，欢迎词已入队。
+- 2026-05-03 16:52 CST，Lane A 已部署 FSM 录制计数收口修复并释放锁：
+  远端备份在
+  `/home/toybrick/streamer_v3/.deploy_backups/lane_a_20260503_164736_fsm_rep_accounting/`；
+  仅更新 `hardware_engine/main_claw_loop.py`，远端 `py_compile` 通过，
+  只重启 main loop，当前 PID `2020`。本地验证通过：
+  `python3 -m py_compile hardware_engine/main_claw_loop.py streamer_app.py`；
+  `pytest tests/test_main_claw_loop_angle_safety.py tests/test_fsm_mode_gating.py
+  tests/test_auto_trigger_chain.py -q` 为 `27 passed`。板端 smoke 通过：
+  `/api/fsm_state` 已暴露 `rep_in_progress`、`last_rep_result`、
+  `last_finalize_reason`、`last_drop_reason`、`total_reps`；main loop
+  启动时已从 `.api_config.json` 注入 DeepSeek 环境，日志显示
+  `DeepSeek Direct 已就绪`。本轮未重启 streamer/voice/vision/emg。
 - 2026-05-02 22:56 CST，Lane B 已把本机 Sensor Lab 升级为
   "GRU 标注验收台"，只改本机 `tools/ironbuddy_sensor_lab.py`、
   `tests/test_sensor_lab_display.py` 和 `docs/technical/ironbuddy_sensor_lab.md`，
@@ -310,6 +322,27 @@ Claude Code 或人工复盘窗口先读这里，再进入具体 run 目录。
   console 看主题对齐；现场点击调试 tab 看代码图能否拉取 + 节点交互；
   现场反馈区粘贴截图 + 备注，确认能写到 operator run 的
   `events.jsonl` + `uploads/`。
+- 2026-05-03 17:25 CST，Claude Code 已部署 V7.37 Stage 1+2+4+6 并释放锁：
+  远端备份 `.deploy_backups/claude_code_20260503_171142_v737_stages_1246/`；
+  上传 `streamer_app.py`、`templates/index.html`、`templates/database.html`、
+  `scripts/opencloud_reminder_daemon.py`，板端 sha256 4/4 MATCH，
+  `py_compile` 通过。仅重启 streamer (PID `8539`)，
+  vision/mainloop/emg/voice 保持 `16141/16240/16314/16363`。烟测通过：
+  `/api/openclaw/status` 返回 `weekly_hour=20, morning_hour=9,
+  next_push_mode=weekly, configured.feishu_app_id=true`；
+  `/api/openclaw/insights` 返回 `ok=true, weekly_training=
+  {sessions:52, good:619, failed:231}, llm_triggers=
+  [疲劳满值自动:8, voice_chat:5]`；`/api/openclaw/once {weekly,
+  send:true}` **真发到飞书** msg_id
+  `om_x100b504568d288a0b26944e3090c0ca`，4 区块文本含训练统计 +
+  高频提问 + LLM 学习方向 + footer；`/api/db/tables` 各表
+  `last_ts` 字段返回今天 09:12 等真实时间。代码 commits: `19cfab8`
+  (Stage 1) → `2693a24` (Stage 2) → `8913ae1` (Stage 4) →
+  `cfb86b7` (Stage 6)，270+ pytest 全绿。下一步：
+  Stage 3 systemd unit (need sudo on board) + Stage 5 RAG citation
+  (needs voice_daemon, blocked by lane_a) + Stage 7 GitHub push
+  (secret-scanned)。当前 `IRONBUDDY_WEEKLY_HOUR` 默认 20，按用户要求
+  应改 17；下次部署 systemd unit 时把 env 设为 17。
 
 ## 当前阻塞
 
