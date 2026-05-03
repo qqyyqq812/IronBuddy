@@ -343,6 +343,27 @@ Claude Code 或人工复盘窗口先读这里，再进入具体 run 目录。
   (needs voice_daemon, blocked by lane_a) + Stage 7 GitHub push
   (secret-scanned)。当前 `IRONBUDDY_WEEKLY_HOUR` 默认 20，按用户要求
   应改 17；下次部署 systemd unit 时把 env 设为 17。
+- 2026-05-03 18:30 CST，Claude Code 已部署 V7.37 Stage 3+7 并释放锁。
+  Stage 7 (GitHub repo push)：`origin/main` 从 `9f1c0a9` (V7.17) 升级到
+  `da764aa` (V7.37 Stage 7 secret hardening)，55 commits fast-forward。
+  事前用 `git filter-repo` 清理本地 history 中 4 个 100MB+ pptx 与
+  20MB png（这些 commit 未 push 过，不算改公开历史）；
+  同时把硬编码 SSH 密码从 `deploy_to_cloud.py` 移到 env，untrack 8 个
+  `*.bak_pre_v45/db.bak_*` 与 `.agent_memory/raw/`，扩 `.gitignore` 加
+  `data/runtime/`、`docs/test_runs/2*/`、`presentation/*.pptx`。
+  ⚠ 已 push 的旧 commit `61fa524` (2026-04-11) 仍然包含原密码字面值，
+  必须**rotate 远端 SSH 密码**（不强 push history 重写）。
+  Stage 3 (systemd unit)：`/etc/systemd/system/ironbuddy-openclaw.service`
+  已 enable + active，daemon PID 由 systemd 管理（current 2594）。
+  Environment=`TZ=Asia/Shanghai` 让 board 默认 UTC 也能按字面 17:00 推送；
+  `WEEKLY_HOUR=17 / DOW=6 (周日) / MORNING_HOUR=9 / EVENING_HOUR=21`。
+  daemon loop 启动时写 `data/runtime/opencloud_schedule.json`，streamer
+  优先读它（systemd-injected env 不可见 streamer 进程）。烟测通过：
+  `/api/openclaw/status` 返回 `weekly_hour=17, morning_hour=9,
+  next_push=evening @ 2026-05-03 21:00 Sun`，6 个核心进程在线
+  (vision/streamer/mainloop/emg/voice + openclaw daemon)。代码 commits:
+  `0c5a00e` (Stage 7 hardening) → `da764aa` (filter-repo 后 SHA) →
+  `0269836` (Stage 3 systemd + TZ + schedule.json)。
 
 ## 当前阻塞
 
