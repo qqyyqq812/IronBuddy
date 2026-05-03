@@ -1,0 +1,42 @@
+[Unit]
+Description=IronBuddy OpenClaw 后台提醒守护进程（数据库归总 + 飞书定时推送）
+Documentation=https://github.com/qqyyqq812/IronBuddy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=toybrick
+Group=toybrick
+WorkingDirectory=/home/toybrick/streamer_v3
+
+# V7.37 用户排程：周日 17:00 推周报 / 每天 9:00 早间提醒
+# 板端默认 UTC，强制 CST 让 hour 字面值与用户期望一致
+Environment=TZ=Asia/Shanghai
+Environment=IRONBUDDY_BOARD_URL=http://127.0.0.1:5000
+Environment=IRONBUDDY_WEEKLY_HOUR=17
+Environment=IRONBUDDY_WEEKLY_DOW=6
+Environment=IRONBUDDY_MORNING_HOUR=9
+Environment=IRONBUDDY_EVENING_HOUR=21
+
+ExecStart=/usr/bin/python3 -u /home/toybrick/streamer_v3/scripts/opencloud_reminder_daemon.py --loop --send --interval 60
+
+# 失败自动重启，最多每 60 秒一次（避免疯狂重连风暴）
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# 日志走 journald，可用 journalctl -u ironbuddy-openclaw 查看
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ironbuddy-openclaw
+
+# 安全收紧（板端无 root 需求）
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/toybrick/streamer_v3/data /tmp /dev/shm
+
+[Install]
+WantedBy=multi-user.target

@@ -223,6 +223,15 @@ def run_once(mode, board_url, dry_run=True):
         "last_push_text": text,
         "feishu_result": dict((k, v) for k, v in result.items() if k != "card"),
     }
+    # V7.37: snapshot the daemon's actual schedule into status so the
+    # streamer-side /api/openclaw/status can echo the truth instead of its
+    # own process env (which doesn't see systemd-injected vars).
+    status["schedule"] = {
+        "weekly_hour": int(os.environ.get("IRONBUDDY_WEEKLY_HOUR", "20")),
+        "weekly_dow": int(os.environ.get("IRONBUDDY_WEEKLY_DOW", "6")),
+        "morning_hour": int(os.environ.get("IRONBUDDY_MORNING_HOUR", "9")),
+        "evening_hour": int(os.environ.get("IRONBUDDY_EVENING_HOUR", "21")),
+    }
     _atomic_json(STATUS_PATH, status)
     # Append to history (rotated to last HISTORY_MAX_LINES on every write)
     try:
@@ -256,9 +265,28 @@ def _should_fire(now_struct, mode):
     return False
 
 
+def _publish_schedule_only():
+    """Write daemon-side schedule to a lightweight file so streamer can echo
+    the truth even when no push has happened yet."""
+    sched_path = os.path.join(RUNTIME_DIR, "opencloud_schedule.json")
+    payload = {
+        "weekly_hour": int(os.environ.get("IRONBUDDY_WEEKLY_HOUR", "20")),
+        "weekly_dow": int(os.environ.get("IRONBUDDY_WEEKLY_DOW", "6")),
+        "morning_hour": int(os.environ.get("IRONBUDDY_MORNING_HOUR", "9")),
+        "evening_hour": int(os.environ.get("IRONBUDDY_EVENING_HOUR", "21")),
+        "loop_started_at": time.time(),
+        "daemon_pid": os.getpid(),
+    }
+    try:
+        _atomic_json(sched_path, payload)
+    except Exception as exc:
+        logging.warning("publish_schedule failed: %s", exc)
+
+
 def loop(board_url, dry_run=True, interval=60):
     last_keys = set()
     logging.info("loop start board_url=%s dry_run=%s interval=%ss", board_url, dry_run, interval)
+    _publish_schedule_only()
     while True:
         now = time.localtime()
         day_key = time.strftime("%Y-%m-%d", now)

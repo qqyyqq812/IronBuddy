@@ -6,6 +6,13 @@ V3.1: + 管理面板 (/admin)
 import os
 import json
 import time
+# V7.37: force CST (Asia/Shanghai) so all UI-facing time strings match the
+# daemon (which is started by systemd with the same TZ). Board defaults UTC.
+os.environ.setdefault("TZ", "Asia/Shanghai")
+try:
+    time.tzset()
+except Exception:
+    pass
 import io
 import logging  # V7.21 (2026-04-21): 补 import —— 原代码未导入, feishu_smart_push 降级路径炸 NameError → 500
 import subprocess
@@ -2156,7 +2163,20 @@ def opencloud_status():
         "deepseek_api_key": bool(_pick_config(cfg, "DEEPSEEK_API_KEY", "deepseek_api_key")),
         "opencloud_board_url": bool(os.environ.get("IRONBUDDY_BOARD_URL")),
     }
+    # V7.37: prefer schedule reported by the daemon itself (sees systemd env);
+    # fall back to streamer's own env when daemon hasn't run yet.
     schedule = _openclaw_schedule()
+    sched_path = os.path.join(PROJECT_ROOT, "data", "runtime",
+                               "opencloud_schedule.json")
+    daemon_sched = _read_json_file(sched_path) or \
+        ((runtime_status or {}).get("schedule") or {})
+    if daemon_sched:
+        schedule = {
+            "weekly_hour": int(daemon_sched.get("weekly_hour", schedule["weekly_hour"])),
+            "weekly_dow": int(daemon_sched.get("weekly_dow", schedule["weekly_dow"])),
+            "morning_hour": int(daemon_sched.get("morning_hour", schedule["morning_hour"])),
+            "evening_hour": int(daemon_sched.get("evening_hour", schedule["evening_hour"])),
+        }
     next_mode, next_ts = _openclaw_next_push(schedule)
     body = {
         "ok": True,
