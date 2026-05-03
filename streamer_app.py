@@ -14,6 +14,45 @@ import traceback
 import glob as glob_mod
 import requests
 from flask import Flask, Response, request, redirect
+try:
+    from hardware_engine.cognitive.coach_knowledge import (
+        build_rag_context,
+        format_capability_reply,
+        format_manual_reply,
+        get_capabilities,
+        is_manual_question,
+        search_knowledge,
+        status_snapshot as coach_kb_status,
+    )
+except Exception as _coach_kb_exc:
+    logging.warning("[coach_kb] import failed: %s", _coach_kb_exc)
+
+    def build_rag_context(query, limit=3, max_chars=480):
+        return ""
+
+    def format_capability_reply(max_items=5):
+        return "我是 IronBuddy 智能健身伙伴，可以指导深蹲、弯举、动作纠正和飞书训练总结。"
+
+    def format_manual_reply(query, max_hits=3):
+        return format_capability_reply(max_items=5)
+
+    def get_capabilities():
+        return []
+
+    def is_manual_question(text):
+        return False
+
+    def search_knowledge(query, limit=3):
+        return []
+
+    def coach_kb_status():
+        return {"ok": False, "error": "coach_kb import failed"}
+
+try:
+    from hardware_engine.integrations.feishu_client import FeishuClient
+except Exception as _feishu_client_exc:
+    logging.warning("[feishu_client] import failed: %s", _feishu_client_exc)
+    FeishuClient = None
 
 template_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), 'templates'))
 app = Flask(__name__, template_folder=template_dir)
@@ -28,6 +67,51 @@ def _json_error_handler(e):
 # V7.21: 飞书推送互斥锁 —— 防止并发/重复点击把后端挤爆
 _FEISHU_PUSH_LOCK = threading.Lock()
 _FEISHU_PUSH_STARTED_AT = [0.0]
+
+
+def _read_tts_volume(default=7):
+    try:
+        if os.path.exists("/dev/shm/tts_volume.json"):
+            with open("/dev/shm/tts_volume.json", "r", encoding="utf-8") as f:
+                return max(1, min(15, int(json.load(f).get("vol", default))))
+    except Exception:
+        pass
+    return default
+
+
+def _volume_to_percent(vol):
+    vol = max(1, min(15, int(vol)))
+    return max(5, min(100, int(round((vol / 15.0) * 100))))
+
+
+def _apply_tts_mixer(vol=None, muted=False):
+    if vol is None:
+        vol = _read_tts_volume()
+    vol = max(1, min(15, int(vol)))
+    percent = 0 if muted else _volume_to_percent(vol)
+    result = {}
+    try:
+        subprocess.run(
+            ["sudo", "-n", "amixer", "-c", "0", "cset",
+             "numid=1,iface=MIXER,name=Playback Path", "2"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=2, check=False)
+    except Exception:
+        pass
+    for ctrl in ("Playback", "Speaker", "Master", "Headphone"):
+        cmd = ["sudo", "-n", "amixer", "-c", "0", "sset", ctrl, "%d%%" % percent]
+        if muted:
+            cmd.append("mute")
+        else:
+            cmd.append("unmute")
+        try:
+            ret = subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, timeout=2,
+                                 check=False)
+            result[ctrl] = int(getattr(ret, "returncode", 1))
+        except Exception:
+            result[ctrl] = -1
+    return {"vol": vol, "percent": percent, "muted": muted, "result": result}
 
 # ===== JPEG 压缩配置 =====
 SNAPSHOT_QUALITY = 65       # JPEG 质量 (1-100)，65 约 35-40KB（保持文字清晰）
@@ -146,6 +230,16 @@ def state_feed():
         pass
     if "muted" not in base:
         base["muted"] = False
+    # Merge current TTS volume so the main UI can stay in sync without polling admin endpoints.
+    try:
+        if os.path.exists("/dev/shm/tts_volume.json"):
+            with open("/dev/shm/tts_volume.json", "r") as f:
+                vol_data = json.loads(f.read())
+                base["tts_volume"] = int(vol_data.get("vol", 7))
+    except Exception:
+        pass
+    if "tts_volume" not in base:
+        base["tts_volume"] = 7
     # V7.6: fatigue_limit 来源优先级 FSM (最权威) > ui_fatigue_limit.json > 1500
     if "fatigue_limit" not in base:
         try:
@@ -156,6 +250,12 @@ def state_feed():
                 base["fatigue_limit"] = 1500
         except Exception:
             base["fatigue_limit"] = 1500
+    try:
+        if os.path.exists("/dev/shm/angle_debug.json"):
+            with open("/dev/shm/angle_debug.json", "r", encoding="utf-8") as f:
+                base["angle_diag"] = json.load(f)
+    except Exception:
+        pass
     return Response(json.dumps(base, ensure_ascii=False), mimetype='application/json')
 
 
@@ -210,6 +310,42 @@ def chat_input():
         return Response(json.dumps({"ok": False, "error": str(e)}), mimetype='application/json', status=500)
 
 
+@app.route('/api/coach/capabilities', methods=['GET'])
+def coach_capabilities():
+    """Return IronBuddy coach feature list for UI/debug use."""
+    body = {
+        "ok": True,
+        "items": get_capabilities(),
+        "reply": format_capability_reply(max_items=7),
+        "kb": coach_kb_status(),
+    }
+    return Response(json.dumps(body, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/coach/rag_query', methods=['POST'])
+def coach_rag_query():
+    """Debug local RAG-lite retrieval without calling DeepSeek."""
+    data = request.get_json(force=True, silent=True) or {}
+    query = str(data.get("query") or data.get("text") or "").strip()
+    try:
+        limit = int(data.get("limit", 3))
+    except Exception:
+        limit = 3
+    if not query:
+        return Response(json.dumps({"ok": False, "error": "empty query"}, ensure_ascii=False),
+                        mimetype='application/json', status=400)
+    hits = search_knowledge(query, limit=limit)
+    context = build_rag_context(query, limit=limit)
+    return Response(json.dumps({
+        "ok": True,
+        "query": query,
+        "manual_intent": is_manual_question(query),
+        "manual_reply": format_manual_reply(query, max_hits=limit),
+        "hits": hits,
+        "context": context,
+    }, ensure_ascii=False), mimetype='application/json')
+
+
 def _read_voice_turn():
     """V7.30 S1: read /dev/shm/voice_turn.json and return (turn_id, stage) or ('', '')."""
     try:
@@ -220,6 +356,66 @@ def _read_voice_turn():
     except Exception:
         pass
     return "", ""
+
+
+def _read_chat_event_seq():
+    try:
+        if os.path.exists("/dev/shm/chat_events.seq"):
+            with open("/dev/shm/chat_events.seq", "r") as f:
+                return int((f.read() or "0").strip() or "0")
+    except Exception:
+        pass
+    return 0
+
+
+@app.route('/api/chat_events')
+def chat_events():
+    """Ordered display bubble timeline for the main shooting UI."""
+    try:
+        since = int(request.args.get("since", "0") or "0")
+    except Exception:
+        since = 0
+    events = []
+    latest_seq = _read_chat_event_seq()
+    try:
+        path = "/dev/shm/chat_events.jsonl"
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except Exception:
+                        continue
+                    try:
+                        seq = int(ev.get("seq", 0))
+                    except Exception:
+                        seq = 0
+                    if seq <= since:
+                        continue
+                    text = str(ev.get("text", "")).strip()
+                    if not text:
+                        continue
+                    events.append({
+                        "seq": seq,
+                        "ts": ev.get("ts", 0),
+                        "turn_id": ev.get("turn_id", ""),
+                        "role": ev.get("role", "coach"),
+                        "kind": ev.get("kind", ""),
+                        "stage": ev.get("stage", ""),
+                        "text": text,
+                    })
+        if events:
+            latest_seq = max(latest_seq, max(int(e.get("seq", 0)) for e in events))
+        return Response(json.dumps(
+            {"ok": True, "events": events[-80:], "latest_seq": latest_seq},
+            ensure_ascii=False), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps(
+            {"ok": False, "events": [], "latest_seq": latest_seq, "error": str(e)},
+            ensure_ascii=False), mimetype='application/json', status=500)
 
 
 @app.route('/api/chat_reply')
@@ -313,28 +509,53 @@ def chat_draft():
 
 @app.route('/api/mute', methods=['POST'])
 def api_mute():
-    """Mute/unmute: (1) write signal for voice daemon TTS gating, (2) hard-mute system Speaker via amixer."""
+    """Mute/unmute: signal voice daemon and recover mixer from hard mute."""
     try:
         data = request.get_json(force=True, silent=True) or {}
         muted = bool(data.get("muted", False))
-        payload = json.dumps({"muted": muted, "ts": time.time()})
+        replay_requested = not muted
+        payload = json.dumps({
+            "muted": muted,
+            "ts": time.time(),
+            "src": "ui",
+            "replay": replay_requested,
+        })
         tmp_path = "/dev/shm/mute_signal.json.tmp"
         target_path = "/dev/shm/mute_signal.json"
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(payload)
         os.rename(tmp_path, target_path)
-        # Hard-mute: amixer control Speaker channel directly (drops L0 alarms too)
+        replay_signal = {}
+        mixer = {}
         try:
-            import subprocess
             if muted:
-                subprocess.run(["sudo", "-n", "amixer", "-c", "0", "sset", "Speaker", "0%", "mute"],
+                try:
+                    with open("/dev/shm/voice_interrupt", "w", encoding="utf-8") as vf:
+                        vf.write(str(time.time()))
+                except Exception:
+                    pass
+                subprocess.run(["sudo", "-n", "killall", "-9", "aplay"],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
             else:
-                subprocess.run(["sudo", "-n", "amixer", "-c", "0", "sset", "Speaker", "80%", "unmute"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-        except Exception:
-            pass  # amixer may not have sudo NOPASSWD; voice daemon gating still works
-        return Response(json.dumps({"ok": True, "muted": muted}), mimetype='application/json')
+                try:
+                    replay_payload = json.dumps({"ts": time.time(), "src": "ui"})
+                    with open("/dev/shm/replay_last_tts.json.tmp", "w", encoding="utf-8") as rf:
+                        rf.write(replay_payload)
+                    os.rename("/dev/shm/replay_last_tts.json.tmp", "/dev/shm/replay_last_tts.json")
+                    replay_signal = {"path": "/dev/shm/replay_last_tts.json"}
+                except Exception as replay_e:
+                    replay_signal = {"error": str(replay_e)[:120]}
+            mixer = _apply_tts_mixer(muted=muted)
+        except Exception as mix_e:
+            mixer = {"error": str(mix_e)[:120]}
+        return Response(json.dumps({
+            "ok": True,
+            "muted": muted,
+            "mixer": mixer,
+            "replay_requested": replay_requested,
+            "replay_signal": replay_signal,
+        }),
+                        mimetype='application/json')
     except Exception as e:
         return Response(json.dumps({"ok": False, "error": str(e)}),
                         mimetype='application/json', status=500)
@@ -364,6 +585,40 @@ def api_fatigue_limit():
                         mimetype='application/json', status=500)
 
 
+@app.route('/api/tts_volume', methods=['GET', 'POST'])
+def api_tts_volume():
+    """Read or set TTS volume for the UI. Values are clamped to Baidu TTS 1-15."""
+    path = "/dev/shm/tts_volume.json"
+    if request.method == 'GET':
+        vol = _read_tts_volume(default=7)
+        return Response(json.dumps({"ok": True, "vol": vol}), mimetype='application/json')
+
+    try:
+        data = request.get_json(force=True, silent=True) or {}
+        raw = data.get("vol", data.get("volume", 7))
+        vol = max(1, min(15, int(raw)))
+        payload = json.dumps({"vol": vol, "ts": time.time(), "src": "ui"})
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.rename(tmp_path, path)
+
+        # Also nudge the speaker mixer so an already-playing clip changes level quickly.
+        muted = False
+        try:
+            if os.path.exists("/dev/shm/mute_signal.json"):
+                with open("/dev/shm/mute_signal.json", "r") as f:
+                    muted = bool(json.loads(f.read()).get("muted", False))
+        except Exception:
+            muted = False
+        mixer = _apply_tts_mixer(vol=vol, muted=muted)
+        return Response(json.dumps({"ok": True, "vol": vol, "mixer": mixer}),
+                        mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json', status=500)
+
+
 def _atomic_write_json(path, payload):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -386,7 +641,8 @@ def api_exercise_mode():
                             mimetype='application/json', status=400)
         # Normalize: FSM/voice daemon use "squat" or "curl"
         norm_mode = "curl" if mode in ("curl", "bicep_curl") else "squat"
-        payload = json.dumps({"mode": norm_mode, "ts": time.time(), "src": "ui"})
+        src = str(data.get("src") or "ui")[:32]
+        payload = json.dumps({"mode": norm_mode, "ts": time.time(), "src": src, "ttl_s": 30})
         _atomic_write_json("/dev/shm/exercise_mode.json", payload)
         _atomic_write_json("/dev/shm/intent_exercise_mode.json", payload)
         return Response(json.dumps({"ok": True, "mode": norm_mode}), mimetype='application/json')
@@ -767,7 +1023,8 @@ def api_switch_inference_mode():
         if mode not in ("pure_vision", "vision_sensor"):
             return Response(json.dumps({"ok": False, "error": "invalid mode"}),
                             mimetype='application/json', status=400)
-        payload = json.dumps({"mode": mode, "ts": time.time(), "src": "ui"})
+        src = str(data.get("src") or "ui")[:32]
+        payload = json.dumps({"mode": mode, "ts": time.time(), "src": src, "ttl_s": 30})
         _atomic_write_json("/dev/shm/inference_mode.json", payload)
         _atomic_write_json("/dev/shm/intent_inference_mode.json", payload)
         return Response(json.dumps({"ok": True, "mode": mode}), mimetype='application/json')
@@ -803,6 +1060,36 @@ def get_vision_mode():
     return Response('{"mode":"local","ts":0}', mimetype='application/json')
 
 
+def _read_cloud_handshake_status(path):
+    """Read cloud RTMPose handshake state file written by cloud_rtmpose_client.
+
+    Returns a dict with keys ok, phase, plus passthrough fields. Phase is one
+    of: connecting | ready | failed | unknown. Never raises.
+    """
+    try:
+        if not os.path.exists(path):
+            return {"ok": True, "phase": "unknown", "detail": "no status file"}
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"ok": False, "phase": "unknown", "error": "not a json object"}
+        data.setdefault("phase", "unknown")
+        data["ok"] = True
+        return data
+    except Exception as e:
+        return {"ok": False, "phase": "unknown", "error": str(e)}
+
+
+@app.route('/api/cloud_handshake_status')
+def cloud_handshake_status():
+    """Cloud RTMPose handshake state. phase: connecting|ready|failed|unknown."""
+    path = os.environ.get("IRONBUDDY_CLOUD_STATUS_PATH",
+                          "/dev/shm/cloud_rtmpose_status.json")
+    body = _read_cloud_handshake_status(path)
+    return Response(json.dumps(body, ensure_ascii=False),
+                    mimetype='application/json')
+
+
 # ===== HDMI Status API =====
 
 @app.route('/api/hdmi_status')
@@ -835,6 +1122,114 @@ def hdmi_status():
 
 
 # ===== Feishu Smart Push API (Nexus Enabled) =====
+
+def _pick_config(api_cfg, *keys):
+    for k in keys:
+        v = api_cfg.get(k)
+        if v:
+            return v
+    return ""
+
+
+def _read_current_fsm_data():
+    fsm_data = {}
+    try:
+        if os.path.exists("/dev/shm/fsm_state.json"):
+            with open("/dev/shm/fsm_state.json", "r", encoding="utf-8") as f:
+                fsm_data = json.load(f)
+    except Exception:
+        fsm_data = {}
+    return fsm_data
+
+
+def _feishu_title_for_type(push_type):
+    titles = {
+        "plan": "IronBuddy 训练规划与处方",
+        "summary": "IronBuddy 训练总结",
+        "reminder": "IronBuddy 身体警钟与状态通报",
+        "weekly": "IronBuddy 训练周报",
+        "daily": "IronBuddy 训练早报",
+    }
+    return titles.get(push_type, "IronBuddy 助理播报")
+
+
+def _build_feishu_training_card(push_type, body_text, fsm_data=None,
+                                degraded=False, ds_error=None):
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    if FeishuClient is not None:
+        footer = "IronBuddy · " + now
+        if degraded and ds_error:
+            footer += " · AI 降级: " + str(ds_error)[:60]
+        return FeishuClient.build_training_card(
+            _feishu_title_for_type(push_type),
+            body_text,
+            stats=fsm_data or {},
+            push_type=push_type,
+            degraded=degraded,
+            footer=footer,
+        )
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "yellow" if degraded else "blue",
+            "title": {"tag": "plain_text", "content": _feishu_title_for_type(push_type)},
+        },
+        "elements": [
+            {"tag": "markdown", "content": "**教练建议**\n" + str(body_text or "（暂无内容）")},
+            {
+                "tag": "note",
+                "elements": [{"tag": "plain_text", "content": "IronBuddy · " + now}],
+            },
+        ],
+    }
+
+
+def _send_feishu_card(card, api_cfg, dry_run=False):
+    if not isinstance(card, dict):
+        return {"ok": False, "error": "card must be dict"}
+    feishu_app_id = _pick_config(api_cfg, "FEISHU_APP_ID", "feishu_app_id")
+    feishu_app_secret = _pick_config(api_cfg, "FEISHU_APP_SECRET", "feishu_app_secret")
+    feishu_chat_id = _pick_config(api_cfg, "FEISHU_CHAT_ID", "feishu_chat_id")
+    feishu_webhook = _pick_config(api_cfg, "FEISHU_WEBHOOK", "feishu_webhook")
+    if dry_run:
+        return {
+            "ok": True,
+            "dry_run": True,
+            "msg_type": "interactive",
+            "card_preview": card,
+        }
+    if FeishuClient is not None and feishu_app_id and feishu_app_secret and feishu_chat_id:
+        client = FeishuClient(
+            app_id=feishu_app_id,
+            app_secret=feishu_app_secret,
+            chat_id=feishu_chat_id,
+            dry_run=False,
+            timeout=15,
+        )
+        return client.send_card(card)
+    if feishu_webhook:
+        try:
+            import urllib.request
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            payload = json.dumps({
+                "msg_type": "interactive",
+                "card": card,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                feishu_webhook,
+                data=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            data = json.loads(urllib.request.urlopen(req, timeout=15, context=ctx).read().decode("utf-8"))
+            if data.get("StatusCode") == 0 or data.get("code") == 0:
+                return {"ok": True, "msg_type": "interactive", "via": "webhook"}
+            return {"ok": False, "error": "webhook send failed", "detail": data}
+        except Exception as exc:
+            return {"ok": False, "error": "webhook exception", "detail": str(exc)}
+    return {"ok": False, "error": "飞书凭证未配置 (需要 APP_ID+SECRET+CHAT_ID 或 WEBHOOK)"}
 
 @app.route('/api/feishu/ping', methods=['GET'])
 def feishu_ping():
@@ -892,6 +1287,36 @@ def feishu_ping():
                         mimetype='application/json', status=500)
 
 
+@app.route('/api/feishu/card_push', methods=['POST'])
+def feishu_card_push():
+    """Unified interactive-card push endpoint.
+
+    Default dry_run=True for manual API tests; pass {"dry_run": false} to send.
+    """
+    api_cfg = _load_api_config()
+    data = request.get_json(force=True, silent=True) or {}
+    push_type = data.get("type", "summary")
+    dry_run = bool(data.get("dry_run", True))
+    body_text = data.get("text") or data.get("body") or data.get("prompt") or "IronBuddy 训练卡片测试"
+    fsm_data = data.get("stats") if isinstance(data.get("stats"), dict) else _read_current_fsm_data()
+    card = _build_feishu_training_card(
+        push_type,
+        body_text,
+        fsm_data=fsm_data,
+        degraded=bool(data.get("degraded", False)),
+        ds_error=data.get("ds_error"),
+    )
+    result = _send_feishu_card(card, api_cfg, dry_run=dry_run)
+    status = 200 if result.get("ok") else 502
+    return Response(json.dumps({
+        "ok": bool(result.get("ok")),
+        "result": result,
+        "card": card,
+        "type_triggered": push_type,
+        "dry_run": dry_run,
+    }, ensure_ascii=False), mimetype='application/json', status=status)
+
+
 @app.route('/api/feishu/push', methods=['POST'])
 @app.route('/api/feishu/send_plan', methods=['POST'])
 def feishu_smart_push():
@@ -914,11 +1339,7 @@ def _feishu_smart_push_impl():
     # V4.8: case-insensitive config read (.api_config.json uses UPPERCASE,
     # but some legacy callers write lowercase). Always try both.
     def _pick(*keys):
-        for k in keys:
-            v = api_cfg.get(k)
-            if v:
-                return v
-        return ""
+        return _pick_config(api_cfg, *keys)
     ds_key = _pick("DEEPSEEK_API_KEY", "deepseek_api_key")
     feishu_app_id = _pick("FEISHU_APP_ID", "feishu_app_id")
     feishu_app_secret = _pick("FEISHU_APP_SECRET", "feishu_app_secret")
@@ -935,13 +1356,7 @@ def _feishu_smart_push_impl():
                             mimetype='application/json', status=400)
 
     # Read current instantaneous training state
-    fsm_data = {}
-    try:
-        if os.path.exists("/dev/shm/fsm_state.json"):
-            with open("/dev/shm/fsm_state.json", "r") as f:
-                fsm_data = json.load(f)
-    except Exception:
-        pass
+    fsm_data = _read_current_fsm_data()
 
     # Extract dynamic properties from request
     req_data = request.get_json(silent=True) or {}
@@ -1044,19 +1459,18 @@ def _feishu_smart_push_impl():
         token_resp = json.loads(urllib.request.urlopen(token_req, timeout=8, context=ctx).read())
         access_token = token_resp.get("tenant_access_token", "")
 
-        # Format Final Feishu Message
-        import datetime
-        type_banner = {
-            "plan": "🏋️ IronBuddy 训练规划与处方",
-            "summary": "🏆 IronBuddy 多日长效训练战报",
-            "reminder": "🚨 IronBuddy 身体警钟与状态通报"
-        }.get(push_type, "🤖 IronBuddy 助理播报")
-
-        feishu_text = f"{type_banner}\n📅 {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n{bot_reply}"
+        # Format Final Feishu Message as one unified interactive card.
+        card = _build_feishu_training_card(
+            push_type,
+            bot_reply,
+            fsm_data=fsm_data,
+            degraded=degraded,
+            ds_error=deepseek_err,
+        )
         msg_data = json.dumps({
             "receive_id": feishu_chat_id,
-            "msg_type": "text",
-            "content": json.dumps({"text": feishu_text}),
+            "msg_type": "interactive",
+            "content": json.dumps(card, ensure_ascii=False),
         }).encode("utf-8")
 
         msg_req = urllib.request.Request(
@@ -1078,6 +1492,7 @@ def _feishu_smart_push_impl():
                 "degraded": degraded,
                 "elapsed_s": round(deepseek_elapsed, 2),
                 "ds_error": deepseek_err if degraded else None,
+                "msg_type": "interactive",
             }), mimetype='application/json')
         else:
             return Response(json.dumps({"ok": False, "error": "飞书发送失败", "detail": str(msg_resp)}),
@@ -1152,7 +1567,8 @@ def training_log():
 # ===== V3.1: Admin Management Panel =====
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-BOARD_TARGET = "toybrick@10.18.76.224"
+BOARD_IP = os.environ.get("IRONBUDDY_BOARD_IP", "10.244.190.224")
+BOARD_TARGET = "toybrick@%s" % BOARD_IP
 BOARD_KEY_PATH = os.path.expanduser("~/.ssh/id_rsa_toybrick")
 CLOUD_SSH = "root@connect.westd.seetacloud.com"
 CLOUD_PORT = 42924  # V4.5 2026-04-18 新实例端口
@@ -1217,7 +1633,7 @@ def admin_overview():
 
     result = {
         "board_online": board_ok,
-        "board_ip": "10.18.76.224",
+        "board_ip": BOARD_IP,
         "csv_count": csv_count,
         "model_exists": model_exists,
         "model_size_kb": round(model_size / 1024, 1) if model_exists else 0,
@@ -1269,7 +1685,7 @@ _SERVICE_LAUNCHERS = {
     },
     "voice": {
         "sig": "voice_daemon.py",
-        "cmd": "cd {root} && PYTHONUNBUFFERED=1 python3 hardware_engine/voice_daemon.py",
+        "cmd": "cd {root} && PYTHONUNBUFFERED=1 bash scripts/start_voice_with_env.sh",
         "log": "/tmp/voice_daemon.log",
     },
 }
@@ -1328,8 +1744,34 @@ def admin_start():
             # Write vision mode signal file
             _run_cmd('echo \'{"mode":"local","ts":' + str(int(time.time())) + '}\'>/dev/shm/vision_mode.json', timeout=2)
         launch = info["cmd"].format(root=PROJECT_ROOT, hdmi=hdmi_val)
+        if name == "voice":
+            # The voice wrapper re-reads .api_config.json and sets ALSA paths.
+            # Do not synthesize env-var shell scripts here: those can leave
+            # credentials in /tmp/_launch_voice.sh and delay the startup prompt
+            # until hot-load catches up.
+            log = info["log"]
+            script_path = "/tmp/_launch_{}.sh".format(name)
+            try:
+                with open(script_path, "w") as sf:
+                    sf.write("#!/bin/bash\n")
+                    sf.write(launch + "\n")
+                os.chmod(script_path, 0o755)
+            except Exception as e:
+                results[name] = {"ok": False, "error": "script write failed: " + str(e)}
+                continue
+            full_cmd = "nohup {} >{} 2>&1 &".format(script_path, log)
+            _run_cmd(full_cmd, timeout=8)
+            import time as _t
+            _t.sleep(1.5)
+            safe_sig2 = '[' + info["sig"][0] + ']' + info["sig"][1:]
+            ok2, pid2 = _run_cmd("pgrep -f '{}' | head -1".format(safe_sig2), timeout=3)
+            results[name] = {"ok": bool(ok2 and pid2.strip()), "pid": pid2.strip() if ok2 else None}
+            if not (ok2 and pid2.strip()):
+                _, err_tail = _run_cmd("tail -5 {}".format(log), timeout=2)
+                results[name]["error"] = err_tail
+            continue
         # Inject API config env vars for FSM and Voice
-        if name in ("fsm", "voice"):
+        if name in ("fsm",):
             api_cfg = _load_api_config()
             api_key = api_cfg.get("deepseek_api_key", "")
             llm_backend = api_cfg.get("llm_backend", "direct")
@@ -1446,7 +1888,11 @@ def admin_stop():
             results[name] = {"ok": False, "error": "unknown service"}
             continue
         if name == "streamer":
-            results[name] = {"ok": True, "status": "skipped (self)"}
+            results[name] = {
+                "ok": True,
+                "running": True,
+                "status": "控制台保留运行",
+            }
             continue
         safe_sig = '[' + sig[0] + ']' + sig[1:] if sig else sig
         ok, pid_out = _run_cmd("pgrep -f '{}'".format(safe_sig), timeout=3)
@@ -1497,7 +1943,7 @@ def admin_training_data():
 def admin_system_info():
     """System status: GPU, board, connectivity"""
     info = {
-        "board": {"online": False, "ip": "10.18.76.224"},
+        "board": {"online": False, "ip": BOARD_IP},
         "cloud_gpu": {"online": False, "info": ""},
         "openclaw": {"status": "unknown"},
     }
@@ -1530,6 +1976,29 @@ def admin_system_info():
             info["cloud_gpu"]["info"] = out
 
     return Response(json.dumps(info, ensure_ascii=False), mimetype='application/json')
+
+
+def _tail_file(path, max_lines=12):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return [x.rstrip("\n") for x in lines[-max_lines:]]
+    except Exception:
+        return []
+
+
+def _file_snapshot(path):
+    try:
+        st = os.stat(path)
+        return {
+            "exists": True,
+            "path": path,
+            "size": st.st_size,
+            "mtime": st.st_mtime,
+            "mtime_text": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st.st_mtime)),
+        }
+    except OSError:
+        return {"exists": False, "path": path}
 
 
 # ── API Config (DeepSeek key, LLM backend) ────────────────────────────────
@@ -1572,6 +2041,197 @@ def _mask_secret(val):
     if len(val) > 10:
         return val[:6] + '****' + val[-4:]
     return '****'
+
+
+def _read_json_file(path):
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        return {}
+    return {}
+
+
+def _tail_file(path, max_lines=20):
+    try:
+        if not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return [x.rstrip("\n") for x in lines[-max_lines:]]
+    except Exception:
+        return []
+
+
+@app.route('/api/opencloud/status', methods=['GET'])
+@app.route('/api/openclaw/status', methods=['GET'])
+def opencloud_status():
+    """Read-only OpenClaw cloud reminder status. Never returns secret values."""
+    cfg = _load_api_config()
+    runtime_status_paths = [
+        os.environ.get("OPENCLOUD_REMINDER_STATUS_PATH", ""),
+        os.path.join(PROJECT_ROOT, "data", "runtime", "opencloud_reminder_status.json"),
+        "/tmp/opencloud_reminder_status.json",
+    ]
+    runtime_status = {}
+    status_path_used = ""
+    for path in runtime_status_paths:
+        if not path:
+            continue
+        runtime_status = _read_json_file(path)
+        if runtime_status:
+            status_path_used = path
+            break
+
+    ok_proc, proc_out = _run_cmd(
+        "pgrep -af '[o]pencloud_reminder_daemon.py|[o]penclaw_daemon.py'",
+        timeout=3,
+    )
+    configured = {
+        "feishu_app_id": bool(_pick_config(cfg, "FEISHU_APP_ID", "feishu_app_id")),
+        "feishu_chat_id": bool(_pick_config(cfg, "FEISHU_CHAT_ID", "feishu_chat_id")),
+        "feishu_webhook": bool(_pick_config(cfg, "FEISHU_WEBHOOK", "feishu_webhook")),
+        "deepseek_api_key": bool(_pick_config(cfg, "DEEPSEEK_API_KEY", "deepseek_api_key")),
+        "opencloud_board_url": bool(os.environ.get("IRONBUDDY_BOARD_URL")),
+    }
+    body = {
+        "ok": True,
+        "presentation_name": "OpenClaw 云端提醒",
+        "primary_runtime": "opencloud",
+        "board_daemon": "fallback",
+        "status_path": status_path_used,
+        "runtime_status": runtime_status,
+        "local_process_running": bool(ok_proc and proc_out.strip()),
+        "local_processes": proc_out.splitlines()[:8] if proc_out else [],
+        "configured": configured,
+        "trigger_files": {
+            "daily_plan": "/dev/shm/openclaw_trigger_daily_plan",
+            "weekly_report": "/dev/shm/openclaw_trigger_weekly_report",
+            "preference_learning": "/dev/shm/openclaw_trigger_preference_learning",
+        },
+        "logs": {
+            "opencloud_reminder": _tail_file("/tmp/opencloud_reminder.log", max_lines=12),
+            "openclaw_daemon": _tail_file("/tmp/openclaw_daemon.log", max_lines=12),
+        },
+    }
+    return Response(json.dumps(body, ensure_ascii=False), mimetype='application/json')
+
+
+def _read_active_system_prompt():
+    try:
+        db = _get_db()
+        if db is not None:
+            return db.get_active_system_prompt(fallback="")
+    except Exception:
+        pass
+    return ""
+
+
+@app.route('/api/demo/rag_status', methods=['GET'])
+def demo_rag_status():
+    """Recording-facing RAG snapshot. Read-only; no DeepSeek call."""
+    query = request.args.get("query", "怎么使用你").strip() or "怎么使用你"
+    try:
+        limit = int(request.args.get("limit", 3))
+    except Exception:
+        limit = 3
+    hits = search_knowledge(query, limit=limit)
+    body = {
+        "ok": True,
+        "query": query,
+        "capabilities": get_capabilities(),
+        "kb": coach_kb_status(),
+        "hits": hits,
+        "context": build_rag_context(query, limit=limit),
+        "manual_reply": format_manual_reply(query, max_hits=limit),
+        "active_prompt_preview": _read_active_system_prompt()[:800],
+        "draft_mode": True,
+        "note": "展示接口只读；提示词草稿需确认后另行激活。",
+    }
+    return Response(json.dumps(body, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/demo/opencloud_records', methods=['GET'])
+def demo_opencloud_records():
+    """Recording-facing OpenCloud/OpenClaw records. Real data only."""
+    status_json = json.loads(opencloud_status().get_data(as_text=True))
+    tables = {}
+    for table in ("daily_summary", "preference_history", "llm_log", "system_prompt_versions"):
+        rows = []
+        try:
+            db = _get_db()
+            if db is not None:
+                import sqlite3 as _sq
+                conn = _sq.connect(_db_view_path())
+                conn.row_factory = _sq.Row
+                if table in _DB_VIEW_WHITELIST:
+                    sql = "SELECT * FROM %s ORDER BY %s LIMIT 20" % (
+                        table, _DB_VIEW_WHITELIST[table]["order_by"])
+                    rows = [dict(r) for r in conn.execute(sql).fetchall()]
+                conn.close()
+        except Exception as e:
+            rows = [{"error": str(e)}]
+        tables[table] = rows
+    return Response(json.dumps({
+        "ok": True,
+        "status": status_json,
+        "records": tables,
+        "real_data_only": True,
+        "empty_message": "暂无真实记录" if not any(tables.values()) else "",
+    }, ensure_ascii=False, default=str), mimetype='application/json')
+
+
+@app.route('/api/demo/debug_workbench', methods=['GET'])
+def demo_debug_workbench():
+    run_root = os.path.join(PROJECT_ROOT, "docs", "test_runs", "ironbuddy_operator")
+    latest = ""
+    try:
+        runs = [x for x in os.listdir(run_root) if x[:8].isdigit()]
+        latest = sorted(runs)[-1] if runs else ""
+    except Exception:
+        pass
+    return Response(json.dumps({
+        "ok": True,
+        "operator_console_url": "http://127.0.0.1:8765/",
+        "run_root": run_root,
+        "latest_run": latest,
+        "summary_path": os.path.join(run_root, latest, "summary.md") if latest else "",
+        "events_path": os.path.join(run_root, latest, "events.jsonl") if latest else "",
+        "features": ["步骤验收", "截图上传", "备注记录", "summary/events 保存"],
+    }, ensure_ascii=False), mimetype='application/json')
+
+
+@app.route('/api/demo/code_graph', methods=['GET'])
+def demo_code_graph():
+    """Small read-only code structure graph for the recording workbench."""
+    nodes = [
+        {"data": {"id": "ui", "label": "templates/index.html", "kind": "frontend"}},
+        {"data": {"id": "api", "label": "streamer_app.py", "kind": "api"}},
+        {"data": {"id": "voice", "label": "voice_daemon.py", "kind": "voice"}},
+        {"data": {"id": "fsm", "label": "main_claw_loop.py", "kind": "fsm"}},
+        {"data": {"id": "kb", "label": "coach_knowledge.py", "kind": "rag"}},
+        {"data": {"id": "db", "label": "data/ironbuddy.db", "kind": "db"}},
+        {"data": {"id": "cloud", "label": "OpenCloud/OpenClaw", "kind": "cloud"}},
+        {"data": {"id": "operator", "label": "operator console", "kind": "debug"}},
+    ]
+    edges = [
+        {"data": {"source": "ui", "target": "api", "label": "HTTP API"}},
+        {"data": {"source": "api", "target": "voice", "label": "/dev/shm voice"}},
+        {"data": {"source": "api", "target": "fsm", "label": "mode intents"}},
+        {"data": {"source": "fsm", "target": "voice", "label": "auto summary"}},
+        {"data": {"source": "api", "target": "kb", "label": "RAG query"}},
+        {"data": {"source": "api", "target": "db", "label": "SQLite viewer"}},
+        {"data": {"source": "cloud", "target": "db", "label": "preferences/prompts"}},
+        {"data": {"source": "operator", "target": "api", "label": "acceptance evidence"}},
+    ]
+    return Response(json.dumps({
+        "ok": True,
+        "library_hint": "cytoscape.js",
+        "nodes": nodes,
+        "edges": edges,
+        "read_only": True,
+    }, ensure_ascii=False), mimetype='application/json')
 
 
 @app.route('/api/admin/api_config', methods=['GET', 'POST'])
@@ -1899,25 +2559,30 @@ def admin_voice_diag():
         result["voice_err"] = str(e)
 
     # 3. Last 5 log lines
+    result["wake_log_markers"] = []
     try:
-        for log_path in ["/tmp/voice.log", "/tmp/voice_daemon.log"]:
+        for log_path in ["/tmp/voice_daemon.log", "/tmp/voice.log"]:
             if os.path.exists(log_path):
-                with open(log_path, "r") as f:
-                    lines = f.readlines()[-5:]
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    all_lines = f.readlines()
+                lines = all_lines[-5:]
                 result["voice_log_tail"] = [l.rstrip() for l in lines]
+                markers = ("wake_ack_done", "second_listen_open", "second_record_done",
+                           "second_no_speech_idle", "second_asr_empty")
+                result["wake_log_markers"] = [
+                    l.rstrip() for l in all_lines[-120:]
+                    if any(m in l for m in markers)
+                ][-12:]
                 break
     except Exception:
         pass
+    try:
+        result["voice_boot_status"] = _read_json_file("/dev/shm/voice_boot_status.json")
+    except Exception:
+        result["voice_boot_status"] = {}
 
     # 4. TTS volume
-    try:
-        if os.path.exists("/dev/shm/tts_volume.json"):
-            with open("/dev/shm/tts_volume.json", "r") as f:
-                result["tts_volume"] = json.load(f).get("vol", 7)
-        else:
-            result["tts_volume"] = 7
-    except Exception:
-        result["tts_volume"] = 7
+    result["tts_volume"] = _read_tts_volume(default=7)
 
     # 5. ALSA mixer state (Playback Path)
     try:
@@ -1927,6 +2592,19 @@ def admin_voice_diag():
              "numid=1,iface=MIXER,name=Playback Path"],
             capture_output=True, timeout=3)
         result["alsa_playback_path"] = out.stdout.decode()[-120:] if out.stdout else ""
+    except Exception:
+        pass
+
+    # 6. Common mixer controls used by mute/volume recovery.
+    try:
+        import subprocess as _sp
+        controls = {}
+        for ctrl in ("Playback", "Speaker", "Master", "Headphone"):
+            out = _sp.run(["amixer", "-c", "0", "sget", ctrl],
+                          capture_output=True, timeout=2)
+            if out.returncode == 0 and out.stdout:
+                controls[ctrl] = out.stdout.decode(errors="ignore")[-180:]
+        result["alsa_volume_controls"] = controls
     except Exception:
         pass
 
@@ -2065,7 +2743,7 @@ def admin_project_info():
 
     # Config
     info["config"] = {
-        "board_ip": "10.18.76.224",
+        "board_ip": BOARD_IP,
         "cloud_url": "https://u953119-ba4a-9dcd6a47.westd.seetacloud.com:8443/infer",
         "flask_port": 5000,
         "emg_port": 8080,
