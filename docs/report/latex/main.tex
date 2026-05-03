@@ -1,0 +1,202 @@
+% IronBuddy 课程结项报告
+% 编译：xelatex main.tex（两遍生成目录）
+% 字体：ctex 默认（fandol 或系统 Noto CJK），不显式指定避免环境差异
+
+\documentclass[UTF8,a4paper,12pt]{ctexart}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{hyperref}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,calc}
+
+% 使用系统 Noto CJK，避免默认 Fandol 字体缺少姓名中的生僻字。
+\setCJKmainfont{Noto Serif CJK SC}
+\setCJKsansfont{Noto Sans CJK SC}
+\setCJKmonofont{Noto Sans Mono CJK SC}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black,
+  urlcolor=blue!60!black,
+  citecolor=blue!60!black,
+  pdftitle={IronBuddy 智能健身教练系统课程结项报告},
+  pdfauthor={李浩瑄}
+}
+
+% 代码块样式
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{gray!50},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  keywordstyle=\color{blue!70!black},
+  commentstyle=\color{green!50!black},
+  stringstyle=\color{orange!70!black},
+  showstringspaces=false
+}
+
+% 章节间距收紧
+\linespread{1.25}
+\setlength{\parskip}{0.4em}
+
+% 自定义命令
+\newcommand{\code}[1]{\nolinkurl{#1}}
+\newcommand{\term}[1]{\textbf{#1}}
+
+\begin{document}
+
+\pagenumbering{gobble}
+\pagestyle{empty}
+
+% ============================================================
+% 浙江大学实验报告封面
+% ============================================================
+\begin{titlepage}
+    \centering
+    \vspace*{1.2cm}
+
+    % 校徽
+    \includegraphics[width=3.4cm]{封面/logo.png}\\[0.6cm]
+
+    % 毛笔体"浙江大学实验报告"标题图
+    \includegraphics[width=0.78\textwidth]{封面/head.jpg}\\[2.2cm]
+
+    % 实验主题副标题
+    {\Large\bfseries IronBuddy 智能健身教练系统}\\[0.4em]
+    {\large 基于 RK3399ProX 的双模态交互系统的工程实现}\\[2.6cm]
+
+    % 信息表
+    {\Large
+    \renewcommand{\arraystretch}{1.7}
+    \begin{tabular}{rl}
+        \textbf{课程名称：} & \underline{\makebox[260pt]{嵌入式系统课程设计}} \\
+        \textbf{实验名称：} & \underline{\makebox[260pt]{IronBuddy 智能健身教练系统}} \\
+        \textbf{姓\hspace{2em}名：} & \underline{\makebox[260pt]{李浩瑄}} \\
+        \textbf{学\hspace{2em}号：} & \underline{\makebox[260pt]{3230105807}} \\
+        \textbf{指导教师：} & \underline{\makebox[260pt]{杜歆}} \\
+        \textbf{实验日期：} & \underline{\makebox[260pt]{\today}} \\
+    \end{tabular}}
+
+    \vfill
+    {\small 项目仓库：\url{https://github.com/qqyyqq812/IronBuddy}}\\[0.4cm]
+\end{titlepage}
+
+\clearpage
+
+\tableofcontents
+\clearpage
+
+\pagestyle{plain}
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\input{sections/00_abstract}
+\clearpage
+\input{sections/01_introduction}
+\input{sections/02_hardware}
+\input{sections/03_methodology}
+\input{sections/04_implementation}
+\input{sections/05_debug}
+\input{sections/06_conclusion}
+\clearpage
+
+\section*{参考文献}
+\addcontentsline{toc}{section}{参考文献}
+
+\begin{thebibliography}{9}
+\bibitem{seniam}
+Hermens, H. J., Freriks, B., Disselhorst-Klug, C., and Rau, G.
+\newblock Development of recommendations for SEMG sensors and sensor placement
+procedures.
+\newblock \emph{Journal of Electromyography and Kinesiology}, 10(5):361--374,
+2000.
+
+\bibitem{burden2010}
+Burden, A.
+\newblock How should we normalize electromyograms obtained from healthy
+participants? What we have learned from over 25 years of research.
+\newblock \emph{Journal of Electromyography and Kinesiology}, 20(6):1023--1035,
+2010.
+
+\bibitem{cede2020}
+Besomi, M., Hodges, P. W., Van Dieen, J., et al.
+\newblock Consensus for experimental design in electromyography: Amplitude
+normalization matrix.
+\newblock \emph{Journal of Electromyography and Kinesiology}, 53:102438, 2020.
+
+\bibitem{rtmpose}
+Jiang, T., Lu, P., Zhang, L., et al.
+\newblock RTMPose: Real-Time Multi-Person Pose Estimation based on MMPose.
+\newblock arXiv:2303.07399, 2023.
+
+\bibitem{mmpose}
+Contributors, MMPose.
+\newblock OpenMMLab Pose Estimation Toolbox and Benchmark.
+\newblock \url{https://github.com/open-mmlab/mmpose}, 2020--2026.
+
+\bibitem{yolov5}
+Jocher, G., Chaurasia, A., Stoken, A., et al.
+\newblock Ultralytics YOLOv5.
+\newblock Zenodo, 2022. \url{https://doi.org/10.5281/zenodo.6222936}.
+
+\bibitem{gru}
+Cho, K., van Merrienboer, B., Gulcehre, C., et al.
+\newblock Learning phrase representations using RNN encoder-decoder for
+statistical machine translation.
+\newblock \emph{Proceedings of EMNLP}, 2014.
+
+\bibitem{weakley2021}
+Weakley, J., Mann, B., Banyard, H., McLaren, S., Scott, T., and Garcia-Ramos, A.
+\newblock Velocity-based training: From theory to application.
+\newblock \emph{Strength and Conditioning Journal}, 43(2):31--49, 2021.
+
+\bibitem{yolopose2022}
+Maji, D., Nagori, S., Mathew, M., and Poddar, D.
+\newblock YOLO-Pose: Enhancing YOLO for Multi Person Pose Estimation Using
+Object Keypoint Similarity Loss.
+\newblock \emph{Proceedings of CVPRW}, 2022.
+
+\bibitem{baltrusaitis2018}
+Baltru\v{s}aitis, T., Ahuja, C., and Morency, L.-P.
+\newblock Multimodal Machine Learning: A Survey and Taxonomy.
+\newblock \emph{IEEE Transactions on Pattern Analysis and Machine Intelligence},
+41(2):423--443, 2018.
+
+\bibitem{cifrek2009}
+Cifrek, M., Medved, V., Ti\v{z}ek, S., and Ostoji\'c, S.
+\newblock Surface EMG based muscle fatigue evaluation in biomechanics.
+\newblock \emph{Clinical Biomechanics}, 24(4):327--340, 2009.
+
+\bibitem{lara2013}
+Lara, O. D., and Labrador, M. A.
+\newblock A Survey on Human Activity Recognition using Wearable Sensors.
+\newblock \emph{IEEE Communications Surveys \& Tutorials}, 15(3):1192--1209, 2013.
+
+\bibitem{rknn2024}
+Rockchip Electronics Co.
+\newblock RKNN-Toolkit User Guide (v1.7.5).
+\newblock \url{https://github.com/airockchip/rknn-toolkit2}, 2024.
+
+\bibitem{esp32}
+Espressif Systems.
+\newblock ESP32-WROOM-32 Datasheet (Rev.~3.6).
+\newblock \url{https://www.espressif.com/en/products/socs/esp32}, 2023.
+
+\bibitem{rk3399pro}
+Rockchip Electronics Co.
+\newblock RK3399Pro Technical Reference Manual.
+\newblock \url{https://www.rock-chips.com/a/en/products/RK33_Series/2018/0130/874.html}, 2020.
+\end{thebibliography}
+
+\end{document}

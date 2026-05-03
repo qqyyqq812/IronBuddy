@@ -1,0 +1,65 @@
+digraph ER {
+    graph [rankdir=LR, splines=ortho, nodesep=0.5, ranksep=0.9, bgcolor="white", fontname="Noto Sans CJK SC"];
+    node  [shape=plaintext, fontname="Noto Sans CJK SC", fontsize=11];
+    edge  [color="#444444", arrowsize=0.7, fontname="Noto Sans CJK SC", fontsize=10];
+
+    training_sessions [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+        <TR><TD BGCOLOR="#1f6feb" COLSPAN="2"><FONT COLOR="white"><B>training_sessions</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><B>id</B></TD><TD ALIGN="LEFT">INTEGER PK</TD></TR>
+        <TR><TD ALIGN="LEFT">started_at</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">ended_at</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">exercise</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">good_count</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+        <TR><TD ALIGN="LEFT">failed_count</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+        <TR><TD ALIGN="LEFT">fatigue_peak</TD><TD ALIGN="LEFT">REAL</TD></TR>
+        <TR><TD ALIGN="LEFT">duration_sec</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+      </TABLE>>];
+
+    rep_events [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+        <TR><TD BGCOLOR="#1f6feb" COLSPAN="2"><FONT COLOR="white"><B>rep_events</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><B>id</B></TD><TD ALIGN="LEFT">INTEGER PK</TD></TR>
+        <TR><TD ALIGN="LEFT"><I>session_id</I></TD><TD ALIGN="LEFT">INTEGER FK</TD></TR>
+        <TR><TD ALIGN="LEFT">ts</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">is_good</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+        <TR><TD ALIGN="LEFT">angle_min</TD><TD ALIGN="LEFT">REAL</TD></TR>
+        <TR><TD ALIGN="LEFT">emg_target</TD><TD ALIGN="LEFT">REAL</TD></TR>
+        <TR><TD ALIGN="LEFT">emg_comp</TD><TD ALIGN="LEFT">REAL</TD></TR>
+      </TABLE>>];
+
+    llm_log [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+        <TR><TD BGCOLOR="#8957e5" COLSPAN="2"><FONT COLOR="white"><B>llm_log</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><B>id</B></TD><TD ALIGN="LEFT">INTEGER PK</TD></TR>
+        <TR><TD ALIGN="LEFT">ts</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">trigger</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">prompt</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">response</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">tokens_in</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+        <TR><TD ALIGN="LEFT">tokens_out</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+      </TABLE>>];
+
+    daily_summary [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+        <TR><TD BGCOLOR="#2da44e" COLSPAN="2"><FONT COLOR="white"><B>daily_summary</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><B>date</B></TD><TD ALIGN="LEFT">TEXT PK</TD></TR>
+        <TR><TD ALIGN="LEFT">session_count</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+        <TR><TD ALIGN="LEFT">total_good</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+        <TR><TD ALIGN="LEFT">total_failed</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+        <TR><TD ALIGN="LEFT">total_fatigue</TD><TD ALIGN="LEFT">REAL</TD></TR>
+        <TR><TD ALIGN="LEFT">best_streak</TD><TD ALIGN="LEFT">INTEGER</TD></TR>
+      </TABLE>>];
+
+    user_config [label=<
+      <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="4">
+        <TR><TD BGCOLOR="#bf8700" COLSPAN="2"><FONT COLOR="white"><B>user_config</B></FONT></TD></TR>
+        <TR><TD ALIGN="LEFT"><B>key</B></TD><TD ALIGN="LEFT">TEXT PK</TD></TR>
+        <TR><TD ALIGN="LEFT">value</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+        <TR><TD ALIGN="LEFT">updated_at</TD><TD ALIGN="LEFT">TEXT</TD></TR>
+      </TABLE>>];
+
+    rep_events:e -> training_sessions:e [label="session_id", arrowhead=crow, arrowtail=tee, dir=both];
+    {rank=same; training_sessions; daily_summary;}
+    {rank=same; rep_events; llm_log; user_config;}
+}
