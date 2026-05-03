@@ -1090,6 +1090,34 @@ def cloud_handshake_status():
                     mimetype='application/json')
 
 
+@app.route('/api/code_graph')
+def api_code_graph():
+    """Return data/code_graph/graph.json built by tools/build_code_graph.py.
+
+    Override path with IRONBUDDY_CODE_GRAPH_PATH env var (used by tests).
+    Returns {ok: false, message} when the file is missing — the frontend
+    shows a placeholder hint instead of erroring.
+    """
+    default_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data", "code_graph", "graph.json")
+    path = os.environ.get("IRONBUDDY_CODE_GRAPH_PATH", default_path)
+    try:
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            data["ok"] = True
+            return Response(json.dumps(data, ensure_ascii=False),
+                            mimetype='application/json')
+        return Response(json.dumps({
+            "ok": False,
+            "message": "graph.json 未生成，请运行 python3 tools/build_code_graph.py --refresh"
+        }, ensure_ascii=False), mimetype='application/json')
+    except Exception as e:
+        return Response(json.dumps({"ok": False, "error": str(e)}),
+                        mimetype='application/json')
+
+
 # ===== HDMI Status API =====
 
 @app.route('/api/hdmi_status')

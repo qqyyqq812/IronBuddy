@@ -56,3 +56,13 @@ def test_load_code_graph_called_in_logs_tab():
     body = src[idx:idx + 1200]
     assert "loadCodeGraph" in body
     assert "'logs'" in body
+
+
+def test_streamer_has_code_graph_endpoint():
+    """Stage 4.2: /api/code_graph endpoint reads graph.json."""
+    streamer_path = os.path.join(PROJECT_ROOT, "streamer_app.py")
+    with open(streamer_path, "r", encoding="utf-8") as f:
+        src = f.read()
+    assert "@app.route('/api/code_graph')" in src
+    assert "data/code_graph/graph.json" in src
+    assert "IRONBUDDY_CODE_GRAPH_PATH" in src
