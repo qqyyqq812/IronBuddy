@@ -1,0 +1,922 @@
+{
+  "nodes": [
+    {
+      "id": "voice_daemon.py",
+      "label": "voice_daemon",
+      "kind": "voice",
+      "loc": 3352,
+      "git_age_days": -1,
+      "path": "hardware_engine/voice_daemon.py"
+    },
+    {
+      "id": "main_claw_loop.py",
+      "label": "main_claw_loop",
+      "kind": "fsm",
+      "loc": 1660,
+      "git_age_days": -1,
+      "path": "hardware_engine/main_claw_loop.py"
+    },
+    {
+      "id": "hardware_engine/__init__.py",
+      "label": "__init__",
+      "kind": "shared",
+      "loc": 1,
+      "git_age_days": 36,
+      "path": "hardware_engine/__init__.py"
+    },
+    {
+      "id": "sysfs_buzzer_driver.py",
+      "label": "sysfs_buzzer_driver",
+      "kind": "shared",
+      "loc": 85,
+      "git_age_days": 36,
+      "path": "hardware_engine/peripherals/sysfs_buzzer_driver.py"
+    },
+    {
+      "id": "loop_buzzer.py",
+      "label": "loop_buzzer",
+      "kind": "shared",
+      "loc": 24,
+      "git_age_days": 36,
+      "path": "hardware_engine/peripherals/loop_buzzer.py"
+    },
+    {
+      "id": "camera.py",
+      "label": "camera",
+      "kind": "sensor",
+      "loc": 66,
+      "git_age_days": 36,
+      "path": "hardware_engine/sensor/camera.py"
+    },
+    {
+      "id": "microphone.py",
+      "label": "microphone",
+      "kind": "sensor",
+      "loc": 135,
+      "git_age_days": 36,
+      "path": "hardware_engine/sensor/microphone.py"
+    },
+    {
+      "id": "hardware_engine/sensor/__init__.py",
+      "label": "__init__",
+      "kind": "sensor",
+      "loc": 1,
+      "git_age_days": 36,
+      "path": "hardware_engine/sensor/__init__.py"
+    },
+    {
+      "id": "hardware_engine/sensor/udp_emg_server.py",
+      "label": "udp_emg_server",
+      "kind": "sensor",
+      "loc": 424,
+      "git_age_days": -1,
+      "path": "hardware_engine/sensor/udp_emg_server.py"
+    },
+    {
+      "id": "feishu_client.py",
+      "label": "feishu_client",
+      "kind": "cloud",
+      "loc": 394,
+      "git_age_days": -1,
+      "path": "hardware_engine/integrations/feishu_client.py"
+    },
+    {
+      "id": "hardware_engine/integrations/__init__.py",
+      "label": "__init__",
+      "kind": "cloud",
+      "loc": 9,
+      "git_age_days": 12,
+      "path": "hardware_engine/integrations/__init__.py"
+    },
+    {
+      "id": "db.py",
+      "label": "db",
+      "kind": "shared",
+      "loc": 748,
+      "git_age_days": 12,
+      "path": "hardware_engine/persistence/db.py"
+    },
+    {
+      "id": "hardware_engine/persistence/__init__.py",
+      "label": "__init__",
+      "kind": "shared",
+      "loc": 0,
+      "git_age_days": 15,
+      "path": "hardware_engine/persistence/__init__.py"
+    },
+    {
+      "id": "Cloud_RTMPose_Receiver.py",
+      "label": "Cloud_RTMPose_Receiver",
+      "kind": "vision",
+      "loc": 84,
+      "git_age_days": 21,
+      "path": "hardware_engine/ai_sensory/Cloud_RTMPose_Receiver.py"
+    },
+    {
+      "id": "Board_UDP_Sender.py",
+      "label": "Board_UDP_Sender",
+      "kind": "vision",
+      "loc": 95,
+      "git_age_days": 21,
+      "path": "hardware_engine/ai_sensory/Board_UDP_Sender.py"
+    },
+    {
+      "id": "local_yolo_pose.py",
+      "label": "local_yolo_pose",
+      "kind": "vision",
+      "loc": 369,
+      "git_age_days": 12,
+      "path": "hardware_engine/ai_sensory/local_yolo_pose.py"
+    },
+    {
+      "id": "cloud_rtmpose_client.py",
+      "label": "cloud_rtmpose_client",
+      "kind": "vision",
+      "loc": 850,
+      "git_age_days": 0,
+      "path": "hardware_engine/ai_sensory/cloud_rtmpose_client.py"
+    },
+    {
+      "id": "asr_worker.py",
+      "label": "asr_worker",
+      "kind": "vision",
+      "loc": 123,
+      "git_age_days": 36,
+      "path": "hardware_engine/ai_sensory/asr_worker.py"
+    },
+    {
+      "id": "hardware_engine/ai_sensory/__init__.py",
+      "label": "__init__",
+      "kind": "vision",
+      "loc": 0,
+      "git_age_days": 36,
+      "path": "hardware_engine/ai_sensory/__init__.py"
+    },
+    {
+      "id": "deploy_to_cloud.py",
+      "label": "deploy_to_cloud",
+      "kind": "vision",
+      "loc": 58,
+      "git_age_days": 12,
+      "path": "hardware_engine/ai_sensory/deploy_to_cloud.py"
+    },
+    {
+      "id": "pose_subscriber.py",
+      "label": "pose_subscriber",
+      "kind": "vision",
+      "loc": 116,
+      "git_age_days": 36,
+      "path": "hardware_engine/ai_sensory/vision/pose_subscriber.py"
+    },
+    {
+      "id": "angle_calculator.py",
+      "label": "angle_calculator",
+      "kind": "vision",
+      "loc": 135,
+      "git_age_days": 36,
+      "path": "hardware_engine/ai_sensory/vision/angle_calculator.py"
+    },
+    {
+      "id": "rtmpose_publisher.py",
+      "label": "rtmpose_publisher",
+      "kind": "vision",
+      "loc": 341,
+      "git_age_days": 21,
+      "path": "hardware_engine/ai_sensory/vision/rtmpose_publisher.py"
+    },
+    {
+      "id": "filters.py",
+      "label": "filters",
+      "kind": "vision",
+      "loc": 90,
+      "git_age_days": 21,
+      "path": "hardware_engine/ai_sensory/vision/filters.py"
+    },
+    {
+      "id": "rtmpose_backend_worker.py",
+      "label": "rtmpose_backend_worker",
+      "kind": "vision",
+      "loc": 142,
+      "git_age_days": 21,
+      "path": "hardware_engine/ai_sensory/vision/experimental/rtmpose_backend_worker.py"
+    },
+    {
+      "id": "rtmpose_camera_test.py",
+      "label": "rtmpose_camera_test",
+      "kind": "vision",
+      "loc": 120,
+      "git_age_days": 26,
+      "path": "hardware_engine/ai_sensory/vision/experimental/rtmpose_camera_test.py"
+    },
+    {
+      "id": "rtmpose_http_server.py",
+      "label": "rtmpose_http_server",
+      "kind": "vision",
+      "loc": 241,
+      "git_age_days": 21,
+      "path": "hardware_engine/ai_sensory/cloud_deploy/rtmpose_http_server.py"
+    },
+    {
+      "id": "test_cloud_endpoint.py",
+      "label": "test_cloud_endpoint",
+      "kind": "vision",
+      "loc": 143,
+      "git_age_days": 21,
+      "path": "hardware_engine/ai_sensory/cloud_deploy/test_cloud_endpoint.py"
+    },
+    {
+      "id": "openclaw_daemon.py",
+      "label": "openclaw_daemon",
+      "kind": "cognitive",
+      "loc": 720,
+      "git_age_days": 12,
+      "path": "hardware_engine/cognitive/openclaw_daemon.py"
+    },
+    {
+      "id": "cognitive_nexus.py",
+      "label": "cognitive_nexus",
+      "kind": "cognitive",
+      "loc": 254,
+      "git_age_days": 12,
+      "path": "hardware_engine/cognitive/cognitive_nexus.py"
+    },
+    {
+      "id": "deepseek_direct.py",
+      "label": "deepseek_direct",
+      "kind": "cognitive",
+      "loc": 247,
+      "git_age_days": 12,
+      "path": "hardware_engine/cognitive/deepseek_direct.py"
+    },
+    {
+      "id": "coach_knowledge.py",
+      "label": "coach_knowledge",
+      "kind": "cognitive",
+      "loc": 241,
+      "git_age_days": -1,
+      "path": "hardware_engine/cognitive/coach_knowledge.py"
+    },
+    {
+      "id": "deepseek_client.py",
+      "label": "deepseek_client",
+      "kind": "cognitive",
+      "loc": 127,
+      "git_age_days": 6,
+      "path": "hardware_engine/cognitive/deepseek_client.py"
+    },
+    {
+      "id": "dual_branch_fusion.py",
+      "label": "dual_branch_fusion",
+      "kind": "cognitive",
+      "loc": 401,
+      "git_age_days": 12,
+      "path": "hardware_engine/cognitive/dual_branch_fusion.py"
+    },
+    {
+      "id": "fusion_model.py",
+      "label": "fusion_model",
+      "kind": "cognitive",
+      "loc": 335,
+      "git_age_days": -1,
+      "path": "hardware_engine/cognitive/fusion_model.py"
+    },
+    {
+      "id": "openclaw_bridge.py",
+      "label": "openclaw_bridge",
+      "kind": "cognitive",
+      "loc": 247,
+      "git_age_days": 21,
+      "path": "hardware_engine/cognitive/openclaw_bridge.py"
+    },
+    {
+      "id": "ble_wearable.py",
+      "label": "ble_wearable",
+      "kind": "shared",
+      "loc": 132,
+      "git_age_days": 26,
+      "path": "hardware_engine/archive/ble_wearable.py"
+    },
+    {
+      "id": "buzzer_test.py",
+      "label": "buzzer_test",
+      "kind": "shared",
+      "loc": 81,
+      "git_age_days": 26,
+      "path": "hardware_engine/archive/buzzer_test.py"
+    },
+    {
+      "id": "sysfs_pwm_buzzer_test.py",
+      "label": "sysfs_pwm_buzzer_test",
+      "kind": "shared",
+      "loc": 50,
+      "git_age_days": 26,
+      "path": "hardware_engine/archive/sysfs_pwm_buzzer_test.py"
+    },
+    {
+      "id": "mock_udp_client.py",
+      "label": "mock_udp_client",
+      "kind": "shared",
+      "loc": 27,
+      "git_age_days": 26,
+      "path": "hardware_engine/archive/mock_udp_client.py"
+    },
+    {
+      "id": "hardware_engine/archive/udp_emg_server.py",
+      "label": "udp_emg_server",
+      "kind": "shared",
+      "loc": 37,
+      "git_age_days": 26,
+      "path": "hardware_engine/archive/udp_emg_server.py"
+    },
+    {
+      "id": "router.py",
+      "label": "router",
+      "kind": "voice",
+      "loc": 158,
+      "git_age_days": 6,
+      "path": "hardware_engine/voice/router.py"
+    },
+    {
+      "id": "state.py",
+      "label": "state",
+      "kind": "voice",
+      "loc": 58,
+      "git_age_days": 6,
+      "path": "hardware_engine/voice/state.py"
+    },
+    {
+      "id": "turn.py",
+      "label": "turn",
+      "kind": "voice",
+      "loc": 61,
+      "git_age_days": 6,
+      "path": "hardware_engine/voice/turn.py"
+    },
+    {
+      "id": "tools.py",
+      "label": "tools",
+      "kind": "voice",
+      "loc": 143,
+      "git_age_days": 6,
+      "path": "hardware_engine/voice/tools.py"
+    },
+    {
+      "id": "recorder.py",
+      "label": "recorder",
+      "kind": "voice",
+      "loc": 98,
+      "git_age_days": -1,
+      "path": "hardware_engine/voice/recorder.py"
+    },
+    {
+      "id": "hardware_engine/voice/__init__.py",
+      "label": "__init__",
+      "kind": "voice",
+      "loc": 9,
+      "git_age_days": 6,
+      "path": "hardware_engine/voice/__init__.py"
+    },
+    {
+      "id": "mia_preprocess_squat.py",
+      "label": "mia_preprocess_squat",
+      "kind": "shared",
+      "loc": 450,
+      "git_age_days": 12,
+      "path": "tools/mia_preprocess_squat.py"
+    },
+    {
+      "id": "ironbuddy_offline_acceptance.py",
+      "label": "ironbuddy_offline_acceptance",
+      "kind": "shared",
+      "loc": 153,
+      "git_age_days": -1,
+      "path": "tools/ironbuddy_offline_acceptance.py"
+    },
+    {
+      "id": "ironbuddy_sensor_lab.py",
+      "label": "ironbuddy_sensor_lab",
+      "kind": "debug",
+      "loc": 2005,
+      "git_age_days": -1,
+      "path": "tools/ironbuddy_sensor_lab.py"
+    },
+    {
+      "id": "vision_rate_probe.py",
+      "label": "vision_rate_probe",
+      "kind": "shared",
+      "loc": 98,
+      "git_age_days": 12,
+      "path": "tools/vision_rate_probe.py"
+    },
+    {
+      "id": "train_fusion_head.py",
+      "label": "train_fusion_head",
+      "kind": "shared",
+      "loc": 588,
+      "git_age_days": 12,
+      "path": "tools/train_fusion_head.py"
+    },
+    {
+      "id": "augment_local.py",
+      "label": "augment_local",
+      "kind": "shared",
+      "loc": 380,
+      "git_age_days": 12,
+      "path": "tools/augment_local.py"
+    },
+    {
+      "id": "collect_training_data.py",
+      "label": "collect_training_data",
+      "kind": "shared",
+      "loc": 519,
+      "git_age_days": 20,
+      "path": "tools/collect_training_data.py"
+    },
+    {
+      "id": "finetune_with_local.py",
+      "label": "finetune_with_local",
+      "kind": "shared",
+      "loc": 559,
+      "git_age_days": 12,
+      "path": "tools/finetune_with_local.py"
+    },
+    {
+      "id": "download_external_data.py",
+      "label": "download_external_data",
+      "kind": "shared",
+      "loc": 348,
+      "git_age_days": 12,
+      "path": "tools/download_external_data.py"
+    },
+    {
+      "id": "flex_preprocess.py",
+      "label": "flex_preprocess",
+      "kind": "shared",
+      "loc": 699,
+      "git_age_days": 12,
+      "path": "tools/flex_preprocess.py"
+    },
+    {
+      "id": "ironbuddy_lane_b_readiness.py",
+      "label": "ironbuddy_lane_b_readiness",
+      "kind": "shared",
+      "loc": 464,
+      "git_age_days": -1,
+      "path": "tools/ironbuddy_lane_b_readiness.py"
+    },
+    {
+      "id": "train_gru_three_class_bicep.py",
+      "label": "train_gru_three_class_bicep",
+      "kind": "shared",
+      "loc": 348,
+      "git_age_days": 12,
+      "path": "tools/train_gru_three_class_bicep.py"
+    },
+    {
+      "id": "collect_training_data_v42.py",
+      "label": "collect_training_data_v42",
+      "kind": "shared",
+      "loc": 606,
+      "git_age_days": 12,
+      "path": "tools/collect_training_data_v42.py"
+    },
+    {
+      "id": "collect_60s_cli.py",
+      "label": "collect_60s_cli",
+      "kind": "shared",
+      "loc": 275,
+      "git_age_days": 12,
+      "path": "tools/collect_60s_cli.py"
+    },
+    {
+      "id": "simulate_emg_from_bicep.py",
+      "label": "simulate_emg_from_bicep",
+      "kind": "shared",
+      "loc": 384,
+      "git_age_days": -1,
+      "path": "tools/simulate_emg_from_bicep.py"
+    },
+    {
+      "id": "simulate_mvc_burst.py",
+      "label": "simulate_mvc_burst",
+      "kind": "shared",
+      "loc": 165,
+      "git_age_days": 12,
+      "path": "tools/simulate_mvc_burst.py"
+    },
+    {
+      "id": "ironbuddy_operator_console.py",
+      "label": "ironbuddy_operator_console",
+      "kind": "debug",
+      "loc": 1130,
+      "git_age_days": -1,
+      "path": "tools/ironbuddy_operator_console.py"
+    },
+    {
+      "id": "hardware_domain_calibrate.py",
+      "label": "hardware_domain_calibrate",
+      "kind": "shared",
+      "loc": 354,
+      "git_age_days": 12,
+      "path": "tools/hardware_domain_calibrate.py"
+    },
+    {
+      "id": "test_memory_e2e.py",
+      "label": "test_memory_e2e",
+      "kind": "shared",
+      "loc": 90,
+      "git_age_days": 12,
+      "path": "tools/test_memory_e2e.py"
+    },
+    {
+      "id": "validate_data.py",
+      "label": "validate_data",
+      "kind": "shared",
+      "loc": 77,
+      "git_age_days": 20,
+      "path": "tools/validate_data.py"
+    },
+    {
+      "id": "train_gru_three_class.py",
+      "label": "train_gru_three_class",
+      "kind": "shared",
+      "loc": 429,
+      "git_age_days": -1,
+      "path": "tools/train_gru_three_class.py"
+    },
+    {
+      "id": "dashboard.py",
+      "label": "dashboard",
+      "kind": "shared",
+      "loc": 562,
+      "git_age_days": 12,
+      "path": "tools/dashboard.py"
+    },
+    {
+      "id": "simulate_emg_from_mia.py",
+      "label": "simulate_emg_from_mia",
+      "kind": "shared",
+      "loc": 467,
+      "git_age_days": 12,
+      "path": "tools/simulate_emg_from_mia.py"
+    },
+    {
+      "id": "seed_fake_chats.py",
+      "label": "seed_fake_chats",
+      "kind": "shared",
+      "loc": 238,
+      "git_age_days": 12,
+      "path": "tools/seed_fake_chats.py"
+    },
+    {
+      "id": "augment_curl_data.py",
+      "label": "augment_curl_data",
+      "kind": "shared",
+      "loc": 184,
+      "git_age_days": 12,
+      "path": "tools/augment_curl_data.py"
+    },
+    {
+      "id": "upgrade_collect_7d_to_11d.py",
+      "label": "upgrade_collect_7d_to_11d",
+      "kind": "shared",
+      "loc": 457,
+      "git_age_days": 12,
+      "path": "tools/upgrade_collect_7d_to_11d.py"
+    },
+    {
+      "id": "vision_feature_probe.py",
+      "label": "vision_feature_probe",
+      "kind": "shared",
+      "loc": 308,
+      "git_age_days": 12,
+      "path": "tools/vision_feature_probe.py"
+    },
+    {
+      "id": "vision_feature_probe_v2.py",
+      "label": "vision_feature_probe_v2",
+      "kind": "shared",
+      "loc": 343,
+      "git_age_days": 12,
+      "path": "tools/vision_feature_probe_v2.py"
+    },
+    {
+      "id": "pretrain_encoders.py",
+      "label": "pretrain_encoders",
+      "kind": "shared",
+      "loc": 430,
+      "git_age_days": 12,
+      "path": "tools/pretrain_encoders.py"
+    },
+    {
+      "id": "_emg_capture_common.py",
+      "label": "_emg_capture_common",
+      "kind": "shared",
+      "loc": 498,
+      "git_age_days": 12,
+      "path": "tools/_emg_capture_common.py"
+    },
+    {
+      "id": "sandbox_data_mock.py",
+      "label": "sandbox_data_mock",
+      "kind": "shared",
+      "loc": 293,
+      "git_age_days": 12,
+      "path": "tools/sandbox_data_mock.py"
+    },
+    {
+      "id": "tools/convert_rtmpose.py",
+      "label": "convert_rtmpose",
+      "kind": "shared",
+      "loc": 61,
+      "git_age_days": 21,
+      "path": "tools/convert_rtmpose.py"
+    },
+    {
+      "id": "dump_onnx.py",
+      "label": "dump_onnx",
+      "kind": "shared",
+      "loc": 6,
+      "git_age_days": 21,
+      "path": "tools/dump_onnx.py"
+    },
+    {
+      "id": "cut_onnx.py",
+      "label": "cut_onnx",
+      "kind": "shared",
+      "loc": 60,
+      "git_age_days": 21,
+      "path": "tools/cut_onnx.py"
+    },
+    {
+      "id": "tools/__init__.py",
+      "label": "__init__",
+      "kind": "shared",
+      "loc": 0,
+      "git_age_days": -1,
+      "path": "tools/__init__.py"
+    },
+    {
+      "id": "infer_holdout.py",
+      "label": "infer_holdout",
+      "kind": "shared",
+      "loc": 258,
+      "git_age_days": 12,
+      "path": "tools/infer_holdout.py"
+    },
+    {
+      "id": "validate_v42_dataset.py",
+      "label": "validate_v42_dataset",
+      "kind": "shared",
+      "loc": 333,
+      "git_age_days": 12,
+      "path": "tools/validate_v42_dataset.py"
+    },
+    {
+      "id": "compute_family_baselines.py",
+      "label": "compute_family_baselines",
+      "kind": "shared",
+      "loc": 403,
+      "git_age_days": 12,
+      "path": "tools/compute_family_baselines.py"
+    },
+    {
+      "id": "EMG_normalization_implementation.py",
+      "label": "EMG_normalization_implementation",
+      "kind": "shared",
+      "loc": 786,
+      "git_age_days": 15,
+      "path": "tools/EMG_normalization_implementation.py"
+    },
+    {
+      "id": "cut_onnx_split.py",
+      "label": "cut_onnx_split",
+      "kind": "shared",
+      "loc": 26,
+      "git_age_days": 21,
+      "path": "tools/cut_onnx_split.py"
+    },
+    {
+      "id": "build_code_graph.py",
+      "label": "build_code_graph",
+      "kind": "shared",
+      "loc": 259,
+      "git_age_days": -1,
+      "path": "tools/build_code_graph.py"
+    },
+    {
+      "id": "tools/rknn_compiler/convert_rtmpose.py",
+      "label": "convert_rtmpose",
+      "kind": "shared",
+      "loc": 56,
+      "git_age_days": 26,
+      "path": "tools/rknn_compiler/convert_rtmpose.py"
+    },
+    {
+      "id": "mvc_cli.py",
+      "label": "mvc_cli",
+      "kind": "shared",
+      "loc": 226,
+      "git_age_days": 12,
+      "path": "tools/archive/mvc_cli.py"
+    },
+    {
+      "id": "cleanup_fake_data.py",
+      "label": "cleanup_fake_data",
+      "kind": "shared",
+      "loc": 118,
+      "git_age_days": 6,
+      "path": "scripts/cleanup_fake_data.py"
+    },
+    {
+      "id": "sync_probe.py",
+      "label": "sync_probe",
+      "kind": "shared",
+      "loc": 86,
+      "git_age_days": 26,
+      "path": "scripts/sync_probe.py"
+    },
+    {
+      "id": "opencloud_reminder_daemon.py",
+      "label": "opencloud_reminder_daemon",
+      "kind": "shared",
+      "loc": 215,
+      "git_age_days": -1,
+      "path": "scripts/opencloud_reminder_daemon.py"
+    },
+    {
+      "id": "cloud_tunnel.py",
+      "label": "cloud_tunnel",
+      "kind": "shared",
+      "loc": 57,
+      "git_age_days": 12,
+      "path": "scripts/cloud_tunnel.py"
+    },
+    {
+      "id": "emg_vision_stitcher.py",
+      "label": "emg_vision_stitcher",
+      "kind": "shared",
+      "loc": 88,
+      "git_age_days": 12,
+      "path": "scripts/emg_vision_stitcher.py"
+    },
+    {
+      "id": "ironbuddy_scheduler.py",
+      "label": "ironbuddy_scheduler",
+      "kind": "shared",
+      "loc": 181,
+      "git_age_days": 15,
+      "path": "scripts/ironbuddy_scheduler.py"
+    },
+    {
+      "id": "streamer_app.py",
+      "label": "streamer_app",
+      "kind": "api",
+      "loc": 3589,
+      "git_age_days": 0,
+      "path": "streamer_app.py"
+    },
+    {
+      "id": "index.html",
+      "label": "index",
+      "kind": "frontend",
+      "loc": 4562,
+      "git_age_days": 0,
+      "path": "templates/index.html"
+    }
+  ],
+  "edges": [
+    {
+      "source": "voice_daemon.py",
+      "target": "state.py",
+      "kind": "import"
+    },
+    {
+      "source": "voice_daemon.py",
+      "target": "recorder.py",
+      "kind": "import"
+    },
+    {
+      "source": "voice_daemon.py",
+      "target": "turn.py",
+      "kind": "import"
+    },
+    {
+      "source": "voice_daemon.py",
+      "target": "coach_knowledge.py",
+      "kind": "import"
+    },
+    {
+      "source": "cloud_rtmpose_client.py",
+      "target": "filters.py",
+      "kind": "import"
+    },
+    {
+      "source": "cloud_rtmpose_client.py",
+      "target": "rtmpose_backend_worker.py",
+      "kind": "import"
+    },
+    {
+      "source": "cloud_rtmpose_client.py",
+      "target": "local_yolo_pose.py",
+      "kind": "import"
+    },
+    {
+      "source": "rtmpose_publisher.py",
+      "target": "filters.py",
+      "kind": "import"
+    },
+    {
+      "source": "rtmpose_publisher.py",
+      "target": "rtmpose_backend_worker.py",
+      "kind": "import"
+    },
+    {
+      "source": "rtmpose_publisher.py",
+      "target": "cloud_rtmpose_client.py",
+      "kind": "import"
+    },
+    {
+      "source": "rtmpose_camera_test.py",
+      "target": "rtmpose_backend_worker.py",
+      "kind": "import"
+    },
+    {
+      "source": "rtmpose_camera_test.py",
+      "target": "angle_calculator.py",
+      "kind": "import"
+    },
+    {
+      "source": "router.py",
+      "target": "tools.py",
+      "kind": "import"
+    },
+    {
+      "source": "ironbuddy_offline_acceptance.py",
+      "target": "coach_knowledge.py",
+      "kind": "import"
+    },
+    {
+      "source": "ironbuddy_offline_acceptance.py",
+      "target": "streamer_app.py",
+      "kind": "import"
+    },
+    {
+      "source": "train_fusion_head.py",
+      "target": "dual_branch_fusion.py",
+      "kind": "import"
+    },
+    {
+      "source": "finetune_with_local.py",
+      "target": "dual_branch_fusion.py",
+      "kind": "import"
+    },
+    {
+      "source": "train_gru_three_class_bicep.py",
+      "target": "fusion_model.py",
+      "kind": "import"
+    },
+    {
+      "source": "train_gru_three_class.py",
+      "target": "fusion_model.py",
+      "kind": "import"
+    },
+    {
+      "source": "pretrain_encoders.py",
+      "target": "dual_branch_fusion.py",
+      "kind": "import"
+    },
+    {
+      "source": "infer_holdout.py",
+      "target": "dual_branch_fusion.py",
+      "kind": "import"
+    },
+    {
+      "source": "infer_holdout.py",
+      "target": "train_fusion_head.py",
+      "kind": "import"
+    },
+    {
+      "source": "opencloud_reminder_daemon.py",
+      "target": "feishu_client.py",
+      "kind": "import"
+    },
+    {
+      "source": "streamer_app.py",
+      "target": "coach_knowledge.py",
+      "kind": "import"
+    },
+    {
+      "source": "streamer_app.py",
+      "target": "feishu_client.py",
+      "kind": "import"
+    },
+    {
+      "source": "streamer_app.py",
+      "target": "db.py",
+      "kind": "import"
+    }
+  ],
+  "generated_at": "2026-05-03T14:35:37.967010",
+  "commit": "6febca2"
+}
