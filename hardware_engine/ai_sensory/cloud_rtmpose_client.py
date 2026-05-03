@@ -170,6 +170,28 @@ LOCAL_POSE_MODEL = os.environ.get(
 )
 LOCAL_POSE_CONF = float(os.environ.get("LOCAL_POSE_CONF", "0.08"))
 SHM_VISION_MODE = "/dev/shm/vision_mode.json"
+SHM_CLOUD_STATUS = "/dev/shm/cloud_rtmpose_status.json" if os.path.exists("/dev/shm") else "/tmp/cloud_rtmpose_status.json"
+
+
+def _write_cloud_status(phase, detail="", backend="cloud"):
+    """Atomic write of cloud RTMPose handshake state. Never raises.
+
+    phase: connecting | ready | failed
+    backend: cloud | local
+    """
+    try:
+        payload = json.dumps({
+            "phase": phase,
+            "ts": time.time(),
+            "detail": detail,
+            "backend": backend,
+        })
+        tmp = SHM_CLOUD_STATUS + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.rename(tmp, SHM_CLOUD_STATUS)
+    except Exception:
+        pass
 
 SHM_POSE_JSON = "/dev/shm/pose_data.json" if os.path.exists("/dev/shm") else "/tmp/pose_data.json"
 SHM_RESULT_JPG = "/dev/shm/result.jpg" if os.path.exists("/dev/shm") else "/tmp/result.jpg"
@@ -546,6 +568,16 @@ def main():
     _infer_lock = threading.Lock()
     _infer_alive = [True]
 
+    # Handshake state for /api/cloud_handshake_status
+    _first_cloud_ok = [False]
+    _consecutive_cloud_fail = [0]
+
+    # Initial status reflects the starting mode
+    if active_mode == "local":
+        _write_cloud_status("ready", "local backend at startup", "local")
+    else:
+        _write_cloud_status("connecting", "cloud worker starting", "cloud")
+
     def _cloud_worker():
         """Background thread: picks up latest JPEG, sends to cloud, stores result."""
         cloud_session = _make_session()
@@ -577,8 +609,26 @@ def main():
                     if kpts:
                         with _infer_lock:
                             _latest_kpts[0] = kpts
-            except Exception:
-                pass
+                        _consecutive_cloud_fail[0] = 0
+                        if not _first_cloud_ok[0]:
+                            _first_cloud_ok[0] = True
+                            _write_cloud_status("ready", "first frame ok", "cloud")
+                else:
+                    _consecutive_cloud_fail[0] += 1
+                    if _consecutive_cloud_fail[0] == 3:
+                        _write_cloud_status(
+                            "failed",
+                            "http {}".format(resp.status_code),
+                            "cloud",
+                        )
+            except Exception as e:
+                _consecutive_cloud_fail[0] += 1
+                if _consecutive_cloud_fail[0] == 3:
+                    _write_cloud_status(
+                        "failed",
+                        "3 consecutive errors: {}".format(str(e)[:80]),
+                        "cloud",
+                    )
         cloud_session.close()
 
     def _local_worker():
@@ -655,6 +705,15 @@ def main():
                 if new_mode != active_mode:
                     print("[CloudClient] Vision mode switched: {} -> {}".format(active_mode, new_mode))
                     active_mode = new_mode
+                    # Reset cloud handshake state on each transition
+                    if active_mode == "local":
+                        _first_cloud_ok[0] = False
+                        _consecutive_cloud_fail[0] = 0
+                        _write_cloud_status("ready", "local backend", "local")
+                    else:
+                        _first_cloud_ok[0] = False
+                        _consecutive_cloud_fail[0] = 0
+                        _write_cloud_status("connecting", "switching to cloud", "cloud")
 
             # ── Encode JPEG for upload (V7.13: local 模式跳过, 省 ~30ms/帧) ─
             jpeg_bytes = None
