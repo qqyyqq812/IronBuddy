@@ -78,6 +78,69 @@
             --accent-teal: #14b8a6;
             --accent-sky: #38bdf8;
             --accent-rose: #f43f5e;
+
+            /* ==== V7.36 Linear-style aliases（不破坏 V4.7，提供成品感命名）==== */
+            --bg-primary: var(--bg-deep);
+            --bg-card: rgba(20, 26, 44, 0.55);
+            --bg-hover: rgba(255,255,255,0.05);
+            --bg-elevated: rgba(20, 26, 44, 0.85);
+            --border-subtle: rgba(255,255,255,0.06);
+            --accent-cyan: #5ec8ff;
+            --accent-orange: #fb923c;
+            --text-strong: #fafafa;
+            --text-default: #d4d4d8;
+        }
+
+        /* V7.36: Inter 数字优化 */
+        body, html {
+            font-feature-settings: "cv11", "ss01";
+        }
+
+        /* V7.36: Linear/Vercel 风按钮三层级 */
+        .btn-primary {
+            background: var(--accent-cyan);
+            color: #062235;
+            border: 0;
+            padding: 8px 14px;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: box-shadow var(--transition-fast);
+        }
+        .btn-primary:hover { box-shadow: 0 0 0 2px rgba(94,200,255,0.35); }
+        .btn-primary:active { transform: translateY(1px); }
+
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text-default);
+            border: 1px solid var(--border-subtle);
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background var(--transition-fast), border-color var(--transition-fast);
+        }
+        .btn-secondary:hover { background: var(--bg-hover); border-color: var(--border-active); }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border: 1px solid transparent;
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: color var(--transition-fast), border-color var(--transition-fast);
+        }
+        .btn-ghost:hover { color: var(--text); border-color: var(--border-subtle); }
+
+        /* V7.36: tab 切换微动画 + 服务状态点微辉 */
+        .tab-panel { transition: opacity var(--transition-fast), transform var(--transition-fast); }
+        .tab-panel:not(.active) { opacity: 0; transform: translateY(4px); }
+        .tab-panel.active { opacity: 1; transform: translateY(0); }
+        .svc-mini-dot.online,
+        .svc-mini-dot.running,
+        .svc-mini-dot.ok {
+            text-shadow: 0 0 6px currentColor;
+            box-shadow: 0 0 6px currentColor;
         }
 
         body {
