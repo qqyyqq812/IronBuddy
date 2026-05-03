@@ -3142,11 +3142,25 @@ def api_db_tables():
                     except Exception:
                         # seed_col 不存在（旧 schema 没这列），不算错
                         pass
+                # V7.37: discover last write timestamp using common column names
+                last_ts = ''
+                for ts_col in ('started_at', 'ts', 'date', 'updated_at',
+                               'timestamp', 'created_at'):
+                    try:
+                        row = conn.execute(
+                            'SELECT MAX(' + ts_col + ') FROM ' + name
+                        ).fetchone()
+                        if row and row[0]:
+                            last_ts = str(row[0])
+                            break
+                    except Exception:
+                        continue
                 result.append({
                     'name': name,
                     'total': total,
                     'seed': seed,
                     'live': live,
+                    'last_ts': last_ts,
                     'exists': True,
                 })
             except Exception as e:

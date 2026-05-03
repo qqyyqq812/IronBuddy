@@ -480,10 +480,14 @@ function renderRows(data) {
   });
   html += '</tbody></table>';
   wrap.innerHTML = html;
+  // V7.37: append last write timestamp from /api/db/tables aggregate
+  var meta = tableCounts[currentTab] || {};
+  var lastTs = meta.last_ts || '';
+  var total = (meta.total != null) ? meta.total : '?';
   document.getElementById('countBadge').innerHTML =
-    '显示 <span>' + data.count + '</span> / ' +
-    (tableCounts[currentTab] ? tableCounts[currentTab].total : '?') +
+    '显示 <span>' + data.count + '</span> / ' + total +
     ' 行（上限 ' + data.limit + '）' +
+    (lastTs ? ' · 最后写入 <span style="color:var(--ok)">' + lastTs + '</span>' : '') +
     (EDIT_MODE && isVoice
       ? ' · <span style="color:var(--warn)">双击单元格编辑</span>'
       : '');
