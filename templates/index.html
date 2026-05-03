@@ -1891,23 +1891,58 @@
                     </div>
                 </div>
 
-                <!-- TAB 2: Debug Workbench -->
+                <!-- TAB 2: Debug Workbench (V7.36 重构：代码图 + 反馈 + iframe + 折叠日志) -->
                 <div class="tab-panel" id="tab-logs">
-                    <div class="workbench-card">
+                    <div class="workbench-card" style="margin-bottom:10px;">
                         <div class="workbench-head">
-                            <div class="workbench-title">&#128295; 后台调试</div>
-                            <a class="workbench-link" id="operatorConsoleLink" href="http://127.0.0.1:8765/" target="_blank">打开调试台</a>
+                            <div class="workbench-title">&#129504; 代码结构图</div>
+                            <div class="workbench-meta" id="codeGraphMeta">点击节点展开邻居 · git diff 着色</div>
                         </div>
-                        <div class="workbench-meta" id="debugWorkbenchInfo">加载调试台状态...</div>
-                    </div>
-                    <div class="terminal-toolbar">
-                        <span class="term-title">&#128187; 服务日志</span>
-                        <div style="display:flex; gap:4px;">
-                            <button class="term-btn" onclick="toggleLogScroll()">自动滚动</button>
-                            <button class="term-btn" onclick="clearLogs()">清空</button>
+                        <div id="codeGraphMount" style="height:360px; position:relative; background:var(--bg-primary, #0a0a0c); border-radius:6px; overflow:hidden;">
+                            <div style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:0.78em; text-align:center; padding:20px;">
+                                运行 <code style="margin:0 4px;">python3 tools/build_code_graph.py --refresh</code> 后刷新本页
+                            </div>
                         </div>
                     </div>
-                    <div class="terminal" id="logTerminal"></div>
+
+                    <div class="workbench-card" style="margin-bottom:10px;">
+                        <div class="workbench-head">
+                            <div class="workbench-title">&#128221; 现场反馈（写入当前 run）</div>
+                            <div class="workbench-meta" id="feedbackMeta">截图粘贴或拖拽，备注可选</div>
+                        </div>
+                        <textarea id="feedbackNote" placeholder="描述当前现象 / 期望行为 / 上下文…"
+                                  style="width:100%; min-height:60px; background:var(--bg-primary, #0a0a0c); color:var(--text-default, #d4d4d8); border:1px solid var(--border-subtle, rgba(255,255,255,0.06)); border-radius:4px; padding:8px; font-size:0.8em; resize:vertical; box-sizing:border-box;"></textarea>
+                        <div id="feedbackImagePreview" style="margin-top:6px;"></div>
+                        <div style="display:flex; gap:6px; margin-top:6px; align-items:center;">
+                            <button class="term-btn" onclick="document.getElementById('feedbackFile').click()">选择截图</button>
+                            <input type="file" id="feedbackFile" accept="image/*" style="display:none;" onchange="onFeedbackFileChosen(event)">
+                            <button class="term-btn" onclick="submitFeedback()">保存到当前 run</button>
+                            <span id="feedbackStatus" style="font-size:0.72em; color:var(--text-dim); align-self:center;"></span>
+                        </div>
+                    </div>
+
+                    <div class="workbench-card" style="margin-bottom:10px;">
+                        <div class="workbench-head">
+                            <div class="workbench-title">&#128295; operator console</div>
+                            <a class="workbench-link" id="operatorConsoleLink" href="http://127.0.0.1:8765/" target="_blank">在新窗口打开</a>
+                        </div>
+                        <div class="workbench-meta" id="debugWorkbenchInfo" style="margin-bottom:6px;">加载调试台状态…</div>
+                        <iframe id="operatorIframe" src="http://127.0.0.1:8765/"
+                                style="width:100%; height:720px; border:0; border-radius:6px; background:var(--bg-primary, #0a0a0c);"
+                                loading="lazy"></iframe>
+                    </div>
+
+                    <details id="logTerminalDetails" style="margin-top:10px;">
+                        <summary style="cursor:pointer; font-size:0.78em; color:var(--text-muted); padding:6px 0;">服务日志终端（点击展开）</summary>
+                        <div class="terminal-toolbar">
+                            <span class="term-title">&#128187; 服务日志</span>
+                            <div style="display:flex; gap:4px;">
+                                <button class="term-btn" onclick="toggleLogScroll()">自动滚动</button>
+                                <button class="term-btn" onclick="clearLogs()">清空</button>
+                            </div>
+                        </div>
+                        <div class="terminal" id="logTerminal"></div>
+                    </details>
                 </div>
 
                 <!-- TAB 3: Data -->
@@ -1931,15 +1966,8 @@
                         <div style="font-size:0.78em; color:var(--text-dim);">加载中...</div>
                     </div>
 
-                    <div class="section-title" style="margin-top:16px;">&#128214; 知识库 / 云端记忆</div>
-                    <div id="demoShowcaseContainer">
-                        <div style="font-size:0.78em; color:var(--text-dim);">加载中...</div>
-                    </div>
-
-                    <div class="section-title" style="margin-top:16px;">&#128736; 代码结构图</div>
-                    <div id="codeGraphContainer">
-                        <div style="font-size:0.78em; color:var(--text-dim);">加载中...</div>
-                    </div>
+                    <!-- V7.36: RAG / OpenCloud / 代码图 移到调试 tab + /database 后台。
+                         不在主页面展示。 -->
                 </div>
 
                 <!-- TAB 4: Settings -->
@@ -2223,8 +2251,8 @@ function switchTab(tabId) {
     if (panel) panel.classList.add('active');
 
     // Lazy load data for tabs
-    if (tabId === 'data') { loadTrainingData(); loadTrainingHistory(); loadModelInfo(); loadDemoShowcase(); loadCodeGraph(); }
-    if (tabId === 'logs') { loadDebugWorkbench(); }
+    if (tabId === 'data') { loadTrainingData(); loadTrainingHistory(); loadModelInfo(); }
+    if (tabId === 'logs') { loadDebugWorkbench(); if (typeof loadCodeGraph === 'function') loadCodeGraph(); }
     if (tabId === 'console') { loadSystemInfo(); loadServices(); }
 }
 
@@ -3332,66 +3360,34 @@ async function loadDebugWorkbench() {
     }
 }
 
-async function loadDemoShowcase() {
-    const container = document.getElementById('demoShowcaseContainer');
-    if (!container) return;
-    try {
-        const ragRes = await fetch('/api/demo/rag_status?query=' + encodeURIComponent('怎么使用你'), { cache: 'no-store' });
-        const rag = await ragRes.json();
-        const cloudRes = await fetch('/api/demo/opencloud_records', { cache: 'no-store' });
-        const cloud = await cloudRes.json();
-        const hits = rag.hits || [];
-        const status = cloud.status || {};
-        const records = cloud.records || {};
-        let html = '<div class="workbench-card">';
-        html += '<div class="workbench-head"><div class="workbench-title">RAG 命中展示</div><div class="workbench-meta">' + escapeHtml((rag.kb && rag.kb.count !== undefined) ? (rag.kb.count + ' 条知识') : '知识库') + '</div></div>';
-        html += '<div class="workbench-meta">' + escapeHtml((rag.manual_reply || '').slice(0, 150) || '暂无固定回复') + '</div>';
-        html += '<div class="demo-list">';
-        hits.slice(0, 3).forEach(function(h) {
-            html += '<div class="demo-row"><span>' + escapeHtml(h.source || h.file || 'knowledge') + '</span><span>' + escapeHtml((h.title || h.text || '').slice(0, 72)) + '</span></div>';
-        });
-        if (!hits.length) html += '<div class="demo-row"><span>命中</span><span>暂无</span></div>';
-        html += '</div></div>';
-        html += '<div class="workbench-card">';
-        html += '<div class="workbench-head"><div class="workbench-title">OpenCloud 真实记录</div><div class="workbench-meta">' + escapeHtml(status.presentation_name || 'OpenCloud/OpenClaw') + '</div></div>';
-        html += '<div class="demo-list">';
-        html += '<div class="demo-row"><span>runtime</span><span>' + escapeHtml(status.primary_runtime || '--') + '</span></div>';
-        html += '<div class="demo-row"><span>local process</span><span>' + escapeHtml(status.local_process_running ? 'running' : 'offline/unknown') + '</span></div>';
-        Object.keys(records).forEach(function(k) {
-            html += '<div class="demo-row"><span>' + escapeHtml(k) + '</span><span>' + ((records[k] || []).length || '暂无真实记录') + '</span></div>';
-        });
-        if (cloud.empty_message) html += '<div class="demo-row"><span>records</span><span>' + escapeHtml(cloud.empty_message) + '</span></div>';
-        html += '</div></div>';
-        container.innerHTML = html;
-    } catch(e) {
-        container.innerHTML = '<div class="workbench-card"><div class="workbench-meta">知识库 / 云端记忆读取失败</div></div>';
-    }
+// V7.36: loadDemoShowcase 已删除（RAG/OpenCloud 走后台 /database 页）
+
+// V7.36: loadCodeGraph 阶段 2 占位，阶段 4 用 3d-force-graph 实现
+async function loadCodeGraph() {
+    var mount = document.getElementById('codeGraphMount');
+    if (!mount) return;
+    // Stage 4 will replace this with 3d-force-graph rendering
+    return;
 }
 
-async function loadCodeGraph() {
-    const container = document.getElementById('codeGraphContainer');
-    if (!container) return;
-    try {
-        const res = await fetch('/api/demo/code_graph', { cache: 'no-store' });
-        const data = await res.json();
-        let html = '<div class="workbench-card">';
-        html += '<div class="workbench-head"><div class="workbench-title">只读结构图</div><div class="workbench-meta">' + escapeHtml(data.library_hint || 'graph') + '</div></div>';
-        html += '<div class="code-graph">';
-        (data.nodes || []).forEach(function(n) {
-            const d = n.data || {};
-            html += '<div class="graph-node">' + escapeHtml(d.label || d.id || '--') + '<span class="kind">' + escapeHtml(d.kind || '') + '</span></div>';
-        });
-        html += '</div>';
-        html += '<div class="graph-edge">';
-        (data.edges || []).slice(0, 12).forEach(function(e) {
-            const d = e.data || {};
-            html += escapeHtml((d.source || '?') + ' -> ' + (d.target || '?') + ' · ' + (d.label || '')) + '<br>';
-        });
-        html += '</div></div>';
-        container.innerHTML = html;
-    } catch(e) {
-        container.innerHTML = '<div class="workbench-card"><div class="workbench-meta">代码结构图读取失败</div></div>';
-    }
+// V7.36: 调试 tab 反馈区
+let _feedbackImageData = null;
+function onFeedbackFileChosen(e) {
+    var f = e.target.files && e.target.files[0];
+    if (!f) return;
+    var reader = new FileReader();
+    reader.onload = function(ev) {
+        _feedbackImageData = ev.target.result;
+        var img = document.getElementById('feedbackImagePreview');
+        if (img) img.innerHTML = '<img src="' + _feedbackImageData + '" style="max-width:200px; max-height:120px; border-radius:4px;">';
+    };
+    reader.readAsDataURL(f);
+}
+
+async function submitFeedback() {
+    // Stage 6 will implement real submit to operator console api/action + api/upload
+    var s = document.getElementById('feedbackStatus');
+    if (s) s.textContent = '阶段 6 实现';
 }
 
 
