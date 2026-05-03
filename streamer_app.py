@@ -2230,6 +2230,94 @@ def openclaw_once():
     }, ensure_ascii=False), mimetype='application/json')
 
 
+@app.route('/api/openclaw/insights', methods=['GET'])
+def openclaw_insights():
+    """Aggregate from real tables for 4-block reminder card.
+
+    Returns 训练统计 + 高频提问 + LLM 触发分布 + 数据时间窗，all 7-day.
+    """
+    import sqlite3 as _sq
+    db_path = os.path.join(PROJECT_ROOT, "data", "ironbuddy.db")
+    out = {
+        "ok": False,
+        "weekly_training": {},
+        "hot_voice_topics": [],
+        "llm_triggers": [],
+        "rag_todo_hint": [],
+        "data_window_days": 7,
+        "db_path": db_path,
+    }
+    try:
+        conn = _sq.connect(db_path, timeout=2.0)
+        cur = conn.cursor()
+        # Block 1: weekly training stats
+        try:
+            cur.execute(
+                "SELECT COUNT(*) sessions, "
+                "COALESCE(SUM(good_count),0) g, "
+                "COALESCE(SUM(failed_count),0) f, "
+                "COALESCE(MAX(fatigue_peak),0) fp "
+                "FROM training_sessions WHERE started_at >= datetime('now','-7 day')"
+            )
+            row = cur.fetchone()
+            if row:
+                out["weekly_training"] = {
+                    "sessions": int(row[0] or 0),
+                    "good": int(row[1] or 0),
+                    "failed": int(row[2] or 0),
+                    "fatigue_peak": float(row[3] or 0),
+                }
+        except Exception:
+            pass
+        # Block 2: hot voice topics (transcript length >= 4 chars to filter noise)
+        try:
+            cur.execute(
+                "SELECT transcript, COUNT(*) c FROM voice_sessions "
+                "WHERE ts >= datetime('now','-7 day') "
+                "AND length(transcript) >= 4 "
+                "AND is_demo_seed = 0 "
+                "GROUP BY transcript ORDER BY c DESC LIMIT 3"
+            )
+            out["hot_voice_topics"] = [
+                {"text": (r[0] or "")[:60], "count": int(r[1])}
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            pass
+        # Block 3: LLM trigger distribution
+        try:
+            cur.execute(
+                "SELECT trigger, COUNT(*) c FROM llm_log "
+                "WHERE ts >= datetime('now','-7 day') "
+                "GROUP BY trigger ORDER BY c DESC LIMIT 5"
+            )
+            out["llm_triggers"] = [
+                {"trigger": r[0] or "?", "count": int(r[1])}
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            pass
+        # Block 3b: RAG todo hint — voice_chat trigger entries with very generic responses
+        try:
+            cur.execute(
+                "SELECT prompt FROM llm_log "
+                "WHERE ts >= datetime('now','-7 day') AND trigger='voice_chat' "
+                "ORDER BY ts DESC LIMIT 3"
+            )
+            out["rag_todo_hint"] = [
+                {"prompt_head": (r[0] or "")[:80]}
+                for r in cur.fetchall()
+            ]
+        except Exception:
+            pass
+        out["ok"] = True
+        conn.close()
+    except Exception as e:
+        out["error"] = str(e)
+    return Response(json.dumps(out, ensure_ascii=False),
+                    mimetype='application/json')
+
+
 @app.route('/api/openclaw/history', methods=['GET'])
 def openclaw_history():
     """Return last N reminder runs from opencloud_reminder_history.jsonl."""

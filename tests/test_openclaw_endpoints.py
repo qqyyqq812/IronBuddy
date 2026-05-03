@@ -73,3 +73,21 @@ def test_settings_card_present_in_html():
     # Stage 1 will add a card with id openclawCard
     assert 'id="openclawCard"' in src
     assert "loadOpenclawStatus" in src
+
+
+def test_insights_endpoint_exists():
+    src = _read(STREAMER)
+    assert "@app.route('/api/openclaw/insights'" in src
+    # body must aggregate from real tables
+    assert "training_sessions" in src
+    assert "voice_sessions" in src or "transcript" in src
+    assert "llm_log" in src
+
+
+def test_daemon_builds_4block_text():
+    """Daemon must include 训练统计 + 高频提问 + 学习方向 + footer."""
+    src = _read(DAEMON)
+    # New build helper added in Stage 2
+    assert "build_reminder_text_v2" in src or "_build_4block_md" in src
+    # Pulls insights via HTTP from streamer
+    assert "/api/openclaw/insights" in src

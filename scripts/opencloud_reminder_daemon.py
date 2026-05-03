@@ -124,6 +124,62 @@ def build_reminder_text(mode, snapshot, board_online):
     ) % (lead, online_text, exercise_label, good, failed, comp)
 
 
+def _fetch_insights(board_url, timeout=4):
+    url = board_url.rstrip("/") + "/api/openclaw/insights"
+    try:
+        req = urllib.request.Request(url, headers={"Cache-Control": "no-cache"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception:
+        return {}
+
+
+def build_reminder_text_v2(mode, snapshot, board_online, insights):
+    """4-block markdown body: 训练统计 + 高频提问 + 学习方向 + footer."""
+    if mode == "morning":
+        lead = "早上好。基于本周数据库，今天关注以下几点："
+    elif mode == "evening":
+        lead = "晚间总结。本周积累的问题已自动归总到 RAG 待补清单："
+    elif mode == "weekly":
+        lead = "周日战报。本周训练 + 知识反哺概览："
+    else:
+        lead = "训练提醒。"
+    weekly = insights.get("weekly_training") or {}
+    sessions = int(weekly.get("sessions", 0))
+    good = int(weekly.get("good", 0))
+    failed = int(weekly.get("failed", 0))
+    block1 = (
+        "**📊 本周训练统计**\n"
+        "会话 %d 次，标准 %d 次，不标准 %d 次"
+    ) % (sessions, good, failed)
+    topics = insights.get("hot_voice_topics") or []
+    if topics:
+        topic_lines = "\n".join(
+            "- " + t["text"] + " (×" + str(t["count"]) + ")"
+            for t in topics
+        )
+        block2 = "**💬 本周高频提问 Top 3**\n" + topic_lines
+    else:
+        block2 = "**💬 本周高频提问 Top 3**\n暂无真实记录"
+    triggers = insights.get("llm_triggers") or []
+    if triggers:
+        trig_lines = " · ".join(
+            (t["trigger"] or "?") + " (" + str(t["count"]) + ")"
+            for t in triggers[:3]
+        )
+        block3 = (
+            "**🦞 教练学习方向**\n"
+            "LLM 触发分布: " + trig_lines + "\n"
+            "下一轮 RAG 知识库将就近补充上述高频提问对应的知识卡。"
+        )
+    else:
+        block3 = "**🦞 教练学习方向**\n本周尚无 LLM 调用，等待用户对话再积累。"
+    today = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+    online = "板端在线" if board_online else "板端离线 (使用%s快照)" % snapshot.get("_snapshot_source", "?")
+    block4 = "_" + online + " · 推送 " + today + " · OpenClaw 后台代理_"
+    return lead + "\n\n" + block1 + "\n\n" + block2 + "\n\n" + block3 + "\n\n" + block4
+
+
 def push_card(mode, snapshot, text, dry_run=True):
     if FeishuClient is None:
         return {"ok": False, "error": "FeishuClient import failed", "detail": _IMPORT_ERROR}
@@ -149,7 +205,11 @@ def push_card(mode, snapshot, text, dry_run=True):
 
 def run_once(mode, board_url, dry_run=True):
     snapshot, board_online, error = load_snapshot(board_url)
-    text = build_reminder_text(mode, snapshot, board_online)
+    insights = _fetch_insights(board_url) if board_online else {}
+    if insights and insights.get("ok"):
+        text = build_reminder_text_v2(mode, snapshot, board_online, insights)
+    else:
+        text = build_reminder_text(mode, snapshot, board_online)
     result = push_card(mode, snapshot, text, dry_run=dry_run)
     status = {
         "ok": bool(result.get("ok")),
