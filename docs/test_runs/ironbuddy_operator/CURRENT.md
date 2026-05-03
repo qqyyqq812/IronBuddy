@@ -292,6 +292,24 @@ Claude Code 或人工复盘窗口先读这里，再进入具体 run 目录。
   `41f4fcc` (frontend poll) → `d828934` (tab cleanup) → `cdf5f08`
   (Linear tokens)。下一步：用户在主网页现场点云端 GPU 切换看 toast；
   Stage 4-6 不阻塞录制，可分批继续。
+- 2026-05-03 14:50 CST，Claude Code 已部署 V7.36 Stage 4-6 并释放锁：
+  远端备份在 `.deploy_backups/claude_code_20260503_144044_v736_stages_4to6/`；
+  上传文件 `streamer_app.py`、`templates/index.html`、
+  `tools/build_code_graph.py`、`tools/__init__.py`、
+  `data/code_graph/graph.json`，板端 sha256 5/5 MATCH，
+  `py_compile` 通过。仅重启 streamer (PID `26338`) — vision/voice/
+  mainloop/emg 保持 `5397/25798/25601/25723`。烟测通过：
+  `/api/code_graph` 返回 `ok=true, nodes=98, edges=26, commit=6febca2`；
+  `/api/cloud_handshake_status` 仍返回 `phase=ready, backend=local`；
+  主网页 HTML 包含 `force-graph` CDN script、`codeGraphMount`、
+  `operatorIframe`、`feedbackNote`、`127.0.0.1:8765`、`submitFeedback`、
+  `/api/code_graph` 调用。本机 `pytest` 256 passed。代码 commits:
+  `d2726b6` (build_code_graph) → `508192d` (code_graph endpoint +
+  force-graph render) → `1c709df` (operator console theme) →
+  `1af5116` (submitFeedback wired)。下一步：用户重启本机 operator
+  console 看主题对齐；现场点击调试 tab 看代码图能否拉取 + 节点交互；
+  现场反馈区粘贴截图 + 备注，确认能写到 operator run 的
+  `events.jsonl` + `uploads/`。
 
 ## 当前阻塞
 
