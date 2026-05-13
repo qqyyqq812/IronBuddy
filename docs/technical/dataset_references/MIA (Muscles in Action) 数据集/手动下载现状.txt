@@ -1,0 +1,2 @@
+可直接下载50多G的数据集
+直链下载：https://musclesinaction.cs.columbia.edu/MIADataset.tar

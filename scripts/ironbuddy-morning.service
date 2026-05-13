@@ -1,0 +1,9 @@
+[Unit]
+Description=IronBuddy morning reminder one-shot
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/toybrick/streamer_v3
+ExecStart=/usr/bin/python3 /home/toybrick/streamer_v3/scripts/ironbuddy_scheduler.py --mode=morning
+User=toybrick

@@ -1,0 +1,117 @@
+{
+  "generated_at": "2026-04-18T21:15:23",
+  "generator": "tools/hardware_domain_calibrate.py",
+  "source": {
+    "user_csvs": [
+      "/home/qq/projects/embedded-fullstack/data/bicep_curl/bad/train_bicep_curl_bad_20260412_092152.csv",
+      "/home/qq/projects/embedded-fullstack/data/bicep_curl/golden/train_bicep_curl_golden_20260412_091807.csv",
+      "/home/qq/projects/embedded-fullstack/data/bicep_curl/lazy/train_bicep_curl_lazy_20260412_092347.csv"
+    ],
+    "user_total_points": 5697,
+    "mia_root": "/home/qq/projects/embedded-fullstack/data/mia_squat_raw",
+    "mia_clips_scanned": 200,
+    "mia_total_points": 12000
+  },
+  "stats": {
+    "user_target": {
+      "n": 3032,
+      "min": 4.0,
+      "p05": 12.0,
+      "p25": 19.0,
+      "p50": 25.0,
+      "p75": 40.0,
+      "p95": 71.0,
+      "max": 92.0,
+      "mean": 30.99043535620053,
+      "std": 17.51616971239941
+    },
+    "user_comp": {
+      "n": 2665,
+      "min": 4.0,
+      "p05": 4.0,
+      "p25": 8.0,
+      "p50": 20.0,
+      "p75": 32.0,
+      "p95": 54.0,
+      "max": 99.0,
+      "mean": 22.636022514071296,
+      "std": 16.663482468243977
+    },
+    "mia_ch0": {
+      "n": 6000,
+      "min": 2.0,
+      "p05": 4.0,
+      "p25": 14.0,
+      "p50": 32.0,
+      "p75": 63.0,
+      "p95": 129.0,
+      "max": 354.0,
+      "mean": 45.10033333333333,
+      "std": 42.17570706645658
+    },
+    "mia_ch4": {
+      "n": 6000,
+      "min": 2.0,
+      "p05": 4.0,
+      "p25": 18.0,
+      "p50": 37.0,
+      "p75": 65.0,
+      "p95": 136.0,
+      "max": 433.0,
+      "mean": 49.2095,
+      "std": 46.25653045516925
+    }
+  },
+  "calibration": {
+    "method_primary": "stretch",
+    "apply_formula": "MIA_signal = alpha * User_signal + beta",
+    "target_mapping": "user_target (biceps or quad) → mia_ch0 (rightquad)",
+    "comp_mapping": "user_comp (forearm or glutt) → mia_ch4 (rightglutt)",
+    "stretch": {
+      "target": {
+        "alpha": 2.1186,
+        "beta": -21.4237
+      },
+      "comp": {
+        "alpha": 2.64,
+        "beta": -6.56
+      }
+    },
+    "zscore": {
+      "target": {
+        "alpha": 2.4078,
+        "beta": -29.5189
+      },
+      "comp": {
+        "alpha": 2.7759,
+        "beta": -13.6263
+      }
+    }
+  },
+  "sanity_check": {
+    "method": "stretch",
+    "target": {
+      "mapped_p05": 4.0,
+      "mapped_p50": 31.54,
+      "mapped_p95": 129.0,
+      "mapped_mean": 44.23,
+      "mia_p05": 4.0,
+      "mia_p95": 129.0,
+      "mia_mean": 45.1,
+      "deviation_p05_pct": 0.0,
+      "deviation_p95_pct": 0.0
+    },
+    "comp": {
+      "mapped_p05": 4.0,
+      "mapped_p50": 46.24,
+      "mapped_p95": 136.0,
+      "mapped_mean": 53.2,
+      "mia_p05": 4.0,
+      "mia_p95": 136.0,
+      "mia_mean": 49.21,
+      "deviation_p05_pct": 0.0,
+      "deviation_p95_pct": 0.0
+    }
+  },
+  "notes": "跨肌群对齐（biceps↔quad, forearm↔glutt），依据用户 2026-04-18 「硬件自身的静息低电平和肌肉力竭高电平的物理包络极限是恒定的」决策。 clip 饱和 (RMS=100) 的点被过滤；低频底噪 (RMS<=0) 被过滤。"
+}

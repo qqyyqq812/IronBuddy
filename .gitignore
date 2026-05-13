@@ -1,0 +1,122 @@
+# =============================================================
+# IronBuddy — public repo .gitignore
+# =============================================================
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# JS / build artifacts
+node_modules/
+dist/
+build/
+*.o
+*.elf
+*.bin
+*.hex
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Sensitive credentials (must never enter the repo)
+.env
+.env.local
+*.key
+.api_config.json
+.api_config.json.*
+.ironbuddy/
+.ironbuddy/secrets.env
+
+# AI model binaries (use Git LFS or external release if needed)
+*.onnx
+*.rknn
+*.pt
+*.pth
+*.tflite
+*.caffemodel
+*.npy
+
+# Large data
+data/ironbuddy.db
+data/ironbuddy.db-*
+data/ironbuddy.db.bak_*
+data/bicep_curl/
+data/bicep_curl_augmented/
+data/bicep_curl_personal/
+data/mia/
+data/mia_squat_raw/
+data/external/
+data/runtime/
+data/v42/
+data/flex/
+data/code_graph/
+
+# Media & logs
+*.mp4
+*.avi
+*.log
+*.tmp
+*.zip
+*.whl
+*.tar.gz
+*.rar
+*.img
+*.pptx
+*.crdownload
+
+# Backups & archives (these were the noise sources in the old repo)
+*.bak
+*.bak_*
+*.backup_*
+.archive/
+backups/
+
+# Internal / private dirs
+.claude/
+.tours/
+.playwright-mcp/
+.agent_memory/
+total/
+presentation/
+output/
+tmp/
+
+# AI agent working logs (must not enter the public repo)
+docs/test_runs/
+docs/audits/
+docs/plans/
+docs/presentations/
+docs/PPT/
+docs/给用户看的/
+docs/给用户看的交付/
+docs/research/
+docs/hardware_ref/
+docs/report/latex/build/
+docs/report/latex/*.aux
+docs/report/latex/*.log
+docs/report/latex/*.out
+docs/report/latex/*.toc
+docs/report/latex/*.bbl
+docs/report/latex/*.blg
+docs/report/latex/*.fdb_latexmk
+docs/report/latex/*.fls
+docs/report/latex/*.synctex.gz
+docs/report/latex/sections/*.aux
+
+# Root-level junk we don't want
+?
+texput.log
+lane_b_sensor_lab_*.png
+build_new_ui.py
+AGENTS.md
+HANDOFF.md
