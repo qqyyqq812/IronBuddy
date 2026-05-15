@@ -1,0 +1,115 @@
+site_name: IronBuddy 使用手册
+site_description: IronBuddy 智能健身教练 · 板端部署 · 视觉 / EMG / GRU / LLM 全链路使用手册
+site_url: https://qqyyqq812.github.io/IronBuddy/
+repo_url: https://github.com/qqyyqq812/IronBuddy
+repo_name: qqyyqq812/IronBuddy
+edit_uri: edit/main/docs/USER_GUIDE/
+
+docs_dir: docs/USER_GUIDE
+site_dir: site
+use_directory_urls: true
+strict: false
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+    - search.share
+    - toc.follow
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.tooltips
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/weather-night
+        name: 切换到深色
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: cyan
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到浅色
+  icon:
+    repo: fontawesome/brands/github
+    logo: material/dumbbell
+  font:
+    text: Noto Sans SC
+    code: JetBrains Mono
+
+nav:
+  - 首页: index.md
+  - 快速上手: 01_快速上手.md
+  - 智能规划与训练总结: 02_智能规划与训练总结.md
+  - 数据库页: 03_数据库与训练趋势.md
+  - 语音控制与飞书周报: 04_语音控制与飞书周报.md
+  - 调试台与 SensorLab: 05_调试台与SensorLab.md
+  - 硬件部署: 06_硬件部署.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - md_in_html
+  - abbr
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+  - pymdownx.caret
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - toc:
+      permalink: true
+      toc_depth: 3
+
+plugins:
+  - search:
+      lang:
+        - zh
+        - en
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/qqyyqq812/IronBuddy
+      name: GitHub 仓库
+  status:
+    new: 新增
+    deprecated: 已废弃
+
+extra_css:
+  - stylesheets/extra.css
